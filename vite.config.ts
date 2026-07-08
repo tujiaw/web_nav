@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { fetchBingWallpaper } from "./src/server/bingWallpaper";
 import { fetchLinkMetadata } from "./src/server/linkMetadata";
 
 export default defineConfig({
@@ -49,6 +50,18 @@ export default defineConfig({
             response.end(JSON.stringify(await fetchLinkMetadata(url)));
           } catch (error) {
             response.statusCode = 400;
+            response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Fetch failed" }));
+          }
+        });
+
+        server.middlewares.use("/api/bing-wallpaper", async (_request, response) => {
+          response.setHeader("Content-Type", "application/json");
+          response.setHeader("Cache-Control", "max-age=86400");
+
+          try {
+            response.end(JSON.stringify(await fetchBingWallpaper()));
+          } catch (error) {
+            response.statusCode = 502;
             response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Fetch failed" }));
           }
         });

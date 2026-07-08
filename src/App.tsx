@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
-  MoreVertical,
   Pencil,
   Upload,
   Plus,
@@ -15,7 +14,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { AlertDialog, Button, Callout, Dialog, DropdownMenu, IconButton, Tabs, Theme, Tooltip } from "@radix-ui/themes";
+import { AlertDialog, Button, Callout, Dialog, DropdownMenu, IconButton, Switch, Tabs, Theme, Tooltip } from "@radix-ui/themes";
 import { CategorySection } from "./components/CategorySection";
 import { EmptyState } from "./components/EmptyState";
 import { CategoryForm, LinkForm, ProfileForm } from "./components/Forms";
@@ -32,6 +31,7 @@ import {
   incrementClicks,
   loadNavigation,
   saveCategory,
+  saveCategoryOrder,
   saveLink,
   upsertProfile,
 } from "./lib/navStore";
@@ -56,6 +56,8 @@ type FilePickerWindow = Window & {
     }>;
   }) => Promise<Array<{ getFile: () => Promise<File> }>>;
 };
+
+const BING_WALLPAPER_STORAGE_KEY = "web-nav-bing-wallpaper";
 
 function getDisplayName(userName?: string | null, email?: string | null) {
   return userName || email?.split("@")[0] || "我的导航";
@@ -148,6 +150,9 @@ function AppContent() {
   const [importResult, setImportResult] = useState("");
   const [error, setError] = useState("");
   const [activeCategoryId, setActiveCategoryId] = useState("");
+  const [draggingCategoryId, setDraggingCategoryId] = useState("");
+  const [bingWallpaperEnabled, setBingWallpaperEnabled] = useState(() => localStorage.getItem(BING_WALLPAPER_STORAGE_KEY) === "true");
+  const [bingWallpaperUrl, setBingWallpaperUrl] = useState("");
   const bookmarkInputRef = useRef<HTMLInputElement | null>(null);
   const { editMode, toggleEditMode } = useEditMode();
 
@@ -164,6 +169,14 @@ function AppContent() {
   );
 
   const filteredCategories = categories;
+  const pageBackgroundStyle = bingWallpaperEnabled && bingWallpaperUrl
+    ? {
+        backgroundImage: `url(${bingWallpaperUrl})`,
+        backgroundAttachment: "fixed",
+        backgroundPosition: "center",
+        backgroundSize: "cover",
+      }
+    : undefined;
 
   const refresh = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!userId) {
@@ -212,6 +225,39 @@ function AppContent() {
     refresh();
   }, [authLoading, refresh, userId]);
 
+  useEffect(() => {
+    localStorage.setItem(BING_WALLPAPER_STORAGE_KEY, String(bingWallpaperEnabled));
+  }, [bingWallpaperEnabled]);
+
+  useEffect(() => {
+    if (!bingWallpaperEnabled || bingWallpaperUrl) {
+      return;
+    }
+
+    let ignore = false;
+    async function loadBingWallpaper() {
+      try {
+        const response = await fetch("/api/bing-wallpaper");
+        if (!response.ok) {
+          throw new Error("Bing wallpaper fetch failed");
+        }
+        const payload = await response.json() as { url?: string };
+        if (!ignore && payload.url) {
+          setBingWallpaperUrl(payload.url);
+        }
+      } catch {
+        if (!ignore) {
+          setBingWallpaperEnabled(false);
+        }
+      }
+    }
+
+    void loadBingWallpaper();
+    return () => {
+      ignore = true;
+    };
+  }, [bingWallpaperEnabled, bingWallpaperUrl]);
+
   // 自动选中第一个分类
   useEffect(() => {
     if (categories.length === 0) {
@@ -259,6 +305,38 @@ function AppContent() {
     await saveCategory(user.id, value);
     setDialog(null);
     await refresh({ showLoading: false });
+  }
+
+  async function handleReorderCategory(targetCategoryId: string) {
+    if (!user || !draggingCategoryId || draggingCategoryId === targetCategoryId) {
+      setDraggingCategoryId("");
+      return;
+    }
+
+    const sourceIndex = categories.findIndex((category) => category.id === draggingCategoryId);
+    const targetIndex = categories.findIndex((category) => category.id === targetCategoryId);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      setDraggingCategoryId("");
+      return;
+    }
+
+    const nextCategories = [...categories];
+    const [movedCategory] = nextCategories.splice(sourceIndex, 1);
+    nextCategories.splice(targetIndex, 0, movedCategory);
+    const orderedCategories = nextCategories.map((category, index) => ({
+      ...category,
+      sortOrder: Date.now() + index,
+    }));
+
+    setDraggingCategoryId("");
+    setCategories(orderedCategories);
+
+    try {
+      await saveCategoryOrder(user.id, orderedCategories);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "调整分类顺序失败");
+      await refresh({ showLoading: false });
+    }
   }
 
   async function confirmDelete() {
@@ -376,7 +454,7 @@ function AppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f8fb]">
+    <div className="min-h-screen bg-[#f6f8fb]" style={pageBackgroundStyle}>
       {/* ── 顶部导航条（sticky） ── */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1240px] items-center gap-4 px-4 py-2.5 sm:px-6 lg:px-8">
@@ -394,7 +472,7 @@ function AppContent() {
           </div>
 
           {/* 右侧操作 */}
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-2">
             {/* 编辑模式切换 */}
             <Tooltip content={editMode ? "切换到浏览模式" : "切换到编辑模式"}>
               <IconButton
@@ -407,37 +485,10 @@ function AppContent() {
               </IconButton>
             </Tooltip>
 
-            {/* 桌面端新增按钮：仅编辑模式 */}
-            {editMode ? (
-              <div className="hidden items-center gap-1 sm:flex">
-                <Tooltip content="新增分类">
-                  <IconButton
-                    aria-label="新增分类"
-                    color="gray"
-                    onClick={() => setDialog({ type: "category" })}
-                    variant="ghost"
-                  >
-                    <FolderPlus size={17} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip content="新增链接">
-                  <IconButton
-                    aria-label="新增链接"
-                    color="gray"
-                    disabled={categories.length === 0}
-                    onClick={() => setDialog({ type: "link" })}
-                    variant="ghost"
-                  >
-                    <Plus size={17} />
-                  </IconButton>
-                </Tooltip>
-              </div>
-            ) : null}
-
             {/* 用户下拉菜单 */}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger>
-                <IconButton aria-label="用户菜单" color="gray" className="rounded-full" variant="ghost">
+                <IconButton aria-label="用户菜单" color="gray" className="rounded-full border border-slate-200 bg-white/70" variant="soft">
                   <UserRound size={17} />
                 </IconButton>
               </DropdownMenu.Trigger>
@@ -464,6 +515,15 @@ function AppContent() {
                   </>
                 ) : null}
                 <DropdownMenu.Separator />
+                <div className="flex items-center justify-between gap-4 px-3 py-2 text-sm text-slate-700">
+                  <span>必应背景壁纸</span>
+                  <Switch
+                    checked={bingWallpaperEnabled}
+                    onCheckedChange={setBingWallpaperEnabled}
+                    onClick={(event) => event.stopPropagation()}
+                  />
+                </div>
+                <DropdownMenu.Separator />
                 <DropdownMenu.Item onSelect={() => setDialog({ type: "profile" })}>
                   <Settings size={15} />
                   账号设置
@@ -475,45 +535,6 @@ function AppContent() {
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Root>
-
-            {/* 移动端更多菜单 */}
-            <div className="sm:hidden">
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger>
-                  <IconButton aria-label="更多操作" color="gray" variant="ghost">
-                    <MoreVertical size={17} />
-                  </IconButton>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content align="end">
-                  {editMode ? (
-                    <>
-                      <DropdownMenu.Item onSelect={() => setDialog({ type: "link" })}>
-                        <Plus size={15} />
-                        新增链接
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item onSelect={() => setDialog({ type: "category" })}>
-                        <FolderPlus size={15} />
-                        新增分类
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item onSelect={() => setImportDialogOpen(true)}>
-                        <Upload size={15} />
-                        导入收藏夹
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Separator />
-                    </>
-                  ) : null}
-                  <DropdownMenu.Item onSelect={() => setDialog({ type: "profile" })}>
-                    <Settings size={15} />
-                    账号设置
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Separator />
-                  <DropdownMenu.Item color="red" onSelect={signOut}>
-                    <LogOut size={15} />
-                    退出登录
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Root>
-            </div>
           </div>
         </div>
       </header>
@@ -538,20 +559,42 @@ function AppContent() {
               <div className="border-b border-slate-200/80 pb-3">
                 <Tabs.List className="flex flex-wrap gap-1 bg-transparent">
                   {filteredCategories.map((category) => (
-                    <div className="flex max-w-full items-center gap-0.5" key={category.id}>
-                      <Tooltip content={`${category.name} · ${category.links.length} 个链接`}>
-                        <Tabs.Trigger
-                          className={`min-w-0 max-w-[180px] shrink-0 border px-3 ${
-                            category.id === activeCategoryId
-                              ? "border-slate-950 bg-slate-950 font-semibold text-white shadow-sm"
-                              : "border-transparent"
-                          }`}
-                          value={category.id}
-                        >
-                          <span className="min-w-0 max-w-[128px] truncate">{category.name}</span>
-                          <span className="ml-1 text-xs opacity-70">{category.links.length}</span>
-                        </Tabs.Trigger>
-                      </Tooltip>
+                    <div
+                      className={`flex max-w-full items-center gap-0.5 rounded-md ${
+                        editMode ? "cursor-grab active:cursor-grabbing" : ""
+                      } ${draggingCategoryId === category.id ? "opacity-45" : ""}`}
+                      draggable={editMode}
+                      key={category.id}
+                      onDragEnd={() => setDraggingCategoryId("")}
+                      onDragOver={(event) => {
+                        if (editMode && draggingCategoryId && draggingCategoryId !== category.id) {
+                          event.preventDefault();
+                        }
+                      }}
+                      onDragStart={(event) => {
+                        if (!editMode) {
+                          return;
+                        }
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", category.id);
+                        setDraggingCategoryId(category.id);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        void handleReorderCategory(category.id);
+                      }}
+                    >
+                      <Tabs.Trigger
+                        className={`min-w-0 max-w-[180px] shrink-0 border px-3 ${
+                          category.id === activeCategoryId
+                            ? "border-slate-950 bg-slate-950 font-semibold text-white shadow-sm"
+                            : "border-transparent"
+                        }`}
+                        value={category.id}
+                      >
+                        <span className="min-w-0 max-w-[128px] truncate">{category.name}</span>
+                        <span className="ml-1 text-xs opacity-70">{category.links.length}</span>
+                      </Tabs.Trigger>
                       {editMode && category.id === activeCategoryId ? (
                         <>
                           <Tooltip content="修改 Tab 名">

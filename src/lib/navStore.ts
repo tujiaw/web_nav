@@ -301,6 +301,26 @@ export async function saveCategory(userId: string, value: CategoryFormValue) {
   }
 }
 
+export async function saveCategoryOrder(userId: string, categories: NavCategory[]) {
+  if (!supabase) {
+    return;
+  }
+
+  const baseOrder = Date.now();
+  const payload = categories.map((category, index) => ({
+    id: category.id,
+    user_id: userId,
+    name: category.name,
+    sort_order: baseOrder + index,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await supabase.from("categories").upsert(payload);
+  if (error) {
+    throw error;
+  }
+}
+
 export async function deleteCategory(categoryId: string) {
   if (!supabase) {
     return;
