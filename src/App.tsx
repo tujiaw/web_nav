@@ -12,6 +12,7 @@ import {
   Plus,
   ShieldCheck,
   Settings,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import { AlertDialog, Button, Callout, Dialog, DropdownMenu, IconButton, Tabs, Theme, Tooltip } from "@radix-ui/themes";
@@ -58,23 +59,6 @@ type FilePickerWindow = Window & {
 
 function getDisplayName(userName?: string | null, email?: string | null) {
   return userName || email?.split("@")[0] || "我的导航";
-}
-
-/** 按搜索词过滤链接 */
-function filterCategories(categories: NavCategory[], query: string): NavCategory[] {
-  if (!query.trim()) return categories;
-  const q = query.toLowerCase();
-  return categories
-    .map((cat) => ({
-      ...cat,
-      links: cat.links.filter(
-        (link) =>
-          link.title.toLowerCase().includes(q) ||
-          link.url.toLowerCase().includes(q) ||
-          (link.description && link.description.toLowerCase().includes(q)),
-      ),
-    }))
-    .filter((cat) => cat.links.length > 0);
 }
 
 function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
@@ -163,7 +147,6 @@ function AppContent() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState("");
   const [error, setError] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
   const [activeCategoryId, setActiveCategoryId] = useState("");
   const bookmarkInputRef = useRef<HTMLInputElement | null>(null);
   const { editMode, toggleEditMode } = useEditMode();
@@ -180,11 +163,7 @@ function AppContent() {
     [allLinks],
   );
 
-  /** 经过搜索过滤后的分类列表 */
-  const filteredCategories = useMemo(
-    () => filterCategories(categories, searchQuery),
-    [categories, searchQuery],
-  );
+  const filteredCategories = categories;
 
   const refresh = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!userId) {
@@ -411,7 +390,7 @@ function AppContent() {
 
           {/* 搜索栏 */}
           <div className="flex flex-1 justify-center">
-            <SearchPanel onFilterChange={setSearchQuery} />
+            <SearchPanel links={allLinks} onOpenLink={handleOpenLink} />
           </div>
 
           {/* 右侧操作 */}
@@ -547,9 +526,7 @@ function AppContent() {
           ) : null}
 
           {/* 快速启动（仅在未搜索时显示） */}
-          {!searchQuery ? (
-            <RecentLinks links={recentLinks} onOpen={handleOpenLink} />
-          ) : null}
+          <RecentLinks links={recentLinks} onOpen={handleOpenLink} />
 
           {/* 分类标签 */}
           {filteredCategories.length > 0 ? (
@@ -558,18 +535,60 @@ function AppContent() {
               onValueChange={setActiveCategoryId}
               value={activeCategoryId}
             >
-              <div className="scrollbar-subtle max-w-full overflow-x-auto border-b border-slate-200/80 pb-3">
-                <Tabs.List className="min-w-max bg-transparent">
+              <div className="border-b border-slate-200/80 pb-3">
+                <Tabs.List className="flex flex-wrap gap-1 bg-transparent">
                   {filteredCategories.map((category) => (
-                    <Tooltip content={`${category.name} · ${category.links.length} 个链接`} key={category.id}>
-                      <Tabs.Trigger
-                        className="max-w-[180px] border border-transparent px-4 data-[state=active]:border-slate-950 data-[state=active]:bg-slate-950 data-[state=active]:font-semibold data-[state=active]:text-white data-[state=active]:shadow-sm"
-                        value={category.id}
-                      >
-                        <span className="truncate">{category.name}</span>
-                        <span className="ml-1 text-xs opacity-70">{category.links.length}</span>
-                      </Tabs.Trigger>
-                    </Tooltip>
+                    <div className="flex max-w-full items-center gap-0.5" key={category.id}>
+                      <Tooltip content={`${category.name} · ${category.links.length} 个链接`}>
+                        <Tabs.Trigger
+                          className={`min-w-0 max-w-[180px] shrink-0 border px-3 ${
+                            category.id === activeCategoryId
+                              ? "border-slate-950 bg-slate-950 font-semibold text-white shadow-sm"
+                              : "border-transparent"
+                          }`}
+                          value={category.id}
+                        >
+                          <span className="min-w-0 max-w-[128px] truncate">{category.name}</span>
+                          <span className="ml-1 text-xs opacity-70">{category.links.length}</span>
+                        </Tabs.Trigger>
+                      </Tooltip>
+                      {editMode && category.id === activeCategoryId ? (
+                        <>
+                          <Tooltip content="修改 Tab 名">
+                            <IconButton
+                              aria-label={`修改 ${category.name} Tab 名`}
+                              className="relative z-10 shrink-0"
+                              color="gray"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setDialog({ type: "category", category });
+                              }}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              size="1"
+                              variant="ghost"
+                            >
+                              <Pencil size={13} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip content="删除分类">
+                            <IconButton
+                              aria-label={`删除 ${category.name} 分类`}
+                              className="relative z-10 shrink-0"
+                              color="red"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setDeleteTarget(category);
+                              }}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              size="1"
+                              variant="ghost"
+                            >
+                              <Trash2 size={13} />
+                            </IconButton>
+                          </Tooltip>
+                        </>
+                      ) : null}
+                    </div>
                   ))}
                 </Tabs.List>
               </div>
@@ -587,10 +606,10 @@ function AppContent() {
             </Tabs.Root>
           ) : (
             <EmptyState
-              actionLabel={searchQuery ? undefined : "新增分类"}
-              description={searchQuery ? "没有匹配的链接，试试其他关键词。" : "先创建一个分类，再把工作入口、AI 工具和常用站点放进去。"}
-              onAction={searchQuery ? undefined : () => setDialog({ type: "category" })}
-              title={searchQuery ? "未找到匹配链接" : "还没有导航分类"}
+              actionLabel="新增分类"
+              description="先创建一个分类，再把工作入口、AI 工具和常用站点放进去。"
+              onAction={() => setDialog({ type: "category" })}
+              title="还没有导航分类"
             />
           )}
         </div>

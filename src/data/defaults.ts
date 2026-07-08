@@ -87,23 +87,5 @@ export const defaultCategories: NavCategory[] = [
         updatedAt: now,
       },
     ],
-  },
-  {
-    id: "learning",
-    name: "学习资料",
-    sortOrder: 3,
-    links: [
-      {
-        id: "mdn",
-        title: "MDN",
-        url: "https://developer.mozilla.org",
-        iconUrl: "https://developer.mozilla.org/favicon.ico",
-        description: "Web 开发文档",
-        categoryId: "learning",
-        clicks: 0,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-  },
+  }
 ];
