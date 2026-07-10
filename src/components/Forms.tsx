@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { Button, Callout, Select, Text, TextArea, TextField } from "@radix-ui/themes";
 import { inspectLinkMetadata } from "../lib/linkMetadata";
-import { getLinkIconUrl } from "../lib/url";
+import { getLinkIconUrl, setDefaultLinkIcon } from "../lib/url";
 import type { CategoryFormValue, LinkFormValue, NavCategory, NavLink, Profile } from "../types";
 
 const labelClass = "space-y-1.5 text-sm font-medium text-slate-700";
@@ -19,6 +19,7 @@ export function LinkForm({ categories, initialCategoryId, initialValue, onCancel
   const [title, setTitle] = useState(initialValue?.title ?? "");
   const [url, setUrl] = useState(initialValue?.url ?? "");
   const [iconUrl, setIconUrl] = useState(initialValue?.iconUrl ?? "");
+  const [iconDataUrl, setIconDataUrl] = useState<string | undefined>(initialValue?.iconDataUrl);
   const [description, setDescription] = useState(initialValue?.description ?? "");
   const [categoryId, setCategoryId] = useState(initialValue?.categoryId ?? initialCategoryId ?? categories[0]?.id ?? "");
   const [saving, setSaving] = useState(false);
@@ -32,7 +33,7 @@ export function LinkForm({ categories, initialCategoryId, initialValue, onCancel
     setSaving(true);
     setSubmitError("");
     try {
-      await onSubmit({ id: initialValue?.id, title, url, iconUrl, description, categoryId });
+      await onSubmit({ id: initialValue?.id, title, url, iconUrl, iconDataUrl, description, categoryId });
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "保存链接失败");
     } finally {
@@ -50,6 +51,7 @@ export function LinkForm({ categories, initialCategoryId, initialValue, onCancel
       setUrl(metadata.url);
       setTitle((current) => current || metadata.title);
       setIconUrl(metadata.iconUrl);
+      setIconDataUrl(metadata.iconDataUrl || undefined);
       setChecked(true);
     } catch (error) {
       setCheckError(error instanceof Error ? error.message : "链接检查失败");
@@ -104,6 +106,13 @@ export function LinkForm({ categories, initialCategoryId, initialValue, onCancel
           <img
             alt=""
             className="h-9 w-9 shrink-0 rounded-md border border-slate-200 bg-slate-50"
+            onError={(event) => {
+              if (iconDataUrl && event.currentTarget.src !== iconDataUrl) {
+                event.currentTarget.src = iconDataUrl;
+                return;
+              }
+              setDefaultLinkIcon(event.currentTarget);
+            }}
             src={getLinkIconUrl(url, iconUrl)}
           />
           <TextField.Root

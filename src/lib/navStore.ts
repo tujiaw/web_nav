@@ -41,12 +41,21 @@ type UserConfigRow = {
   updated_at: string;
 };
 
+type LinkIconRow = {
+  link_id: string;
+  user_id: string;
+  icon_data: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type SupabaseErrorLike = {
   code?: string;
   message?: string;
 };
 
 type LinkInsertRow = {
+  id?: string;
   user_id: string;
   category_id: string;
   title: string;
@@ -56,17 +65,52 @@ type LinkInsertRow = {
   clicks: number;
 };
 
+type LinkIconInsertRow = {
+  link_id: string;
+  user_id: string;
+  icon_data: string;
+};
+
 const linkInsertBatchSize = 25;
+const profileSelectColumns = "id,username,password_hint,created_at,updated_at";
+const categorySelectColumns = "id,user_id,name,sort_order,created_at,updated_at";
+const linkSelectColumns =
+  "id,user_id,category_id,title,url,icon_url,description,clicks,created_at,updated_at";
 
 function isMissingIconColumn(error: unknown) {
   const reason = error as SupabaseErrorLike;
   return reason.code === "PGRST204" && reason.message?.includes("icon_url");
 }
 
+function isMissingLinkIconsTable(error: unknown) {
+  const reason = error as SupabaseErrorLike;
+  return reason.code === "42P01" || reason.message?.includes("link_icons");
+}
+
 function stripIconUrl<T extends { icon_url?: string | null }>(row: T) {
   const rest = { ...row };
   delete rest.icon_url;
   return rest;
+}
+
+function isDataImageUrl(value?: string | null) {
+  return /^data:image\//i.test(value?.trim() ?? "");
+}
+
+function getPersistedIconUrl(value?: string | null) {
+  const iconUrl = value?.trim() ?? "";
+  return iconUrl && !isDataImageUrl(iconUrl) ? iconUrl : null;
+}
+
+function getIconDataUrl(value?: string | null) {
+  const iconDataUrl = value?.trim() ?? "";
+  return isDataImageUrl(iconDataUrl) ? iconDataUrl : "";
+}
+
+function getDatabaseLinkId(id?: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id ?? "")
+    ? id!
+    : crypto.randomUUID();
 }
 
 function toBatches<T>(items: T[], size: number) {
@@ -99,6 +143,26 @@ async function insertLinkRows(linkRows: LinkInsertRow[]) {
   }
 }
 
+async function upsertLinkIconRows(iconRows: LinkIconInsertRow[]) {
+  if (!supabase || iconRows.length === 0) {
+    return;
+  }
+
+  const { error } = await supabase.from("link_icons").upsert(
+    iconRows.map((row) => ({
+      ...row,
+      updated_at: new Date().toISOString(),
+    })),
+  );
+
+  if (error) {
+    if (isMissingLinkIconsTable(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function mapProfile(row: ProfileRow): Profile {
   return {
     id: row.id,
@@ -109,30 +173,41 @@ function mapProfile(row: ProfileRow): Profile {
   };
 }
 
+function mapLink(row: LinkRow): NavLink {
+  return {
+    id: row.id,
+    title: row.title,
+    url: row.url,
+    iconUrl: row.icon_url ?? undefined,
+    description: row.description ?? "",
+    categoryId: row.category_id,
+    clicks: row.clicks,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapCategory(row: CategoryRow, links: NavLink[] = []): NavCategory {
+  return {
+    id: row.id,
+    name: row.name,
+    sortOrder: row.sort_order,
+    links,
+  };
+}
+
 function mapCategories(categories: CategoryRow[], links: LinkRow[]): NavCategory[] {
   return categories
     .sort((a, b) => a.sort_order - b.sort_order)
-    .map((category) => ({
-      id: category.id,
-      name: category.name,
-      sortOrder: category.sort_order,
-      links: links
-        .filter((link) => link.category_id === category.id)
-        .sort((a, b) => a.title.localeCompare(b.title, "zh-CN"))
-        .map(
-          (link): NavLink => ({
-            id: link.id,
-            title: link.title,
-            url: link.url,
-            iconUrl: link.icon_url ?? undefined,
-            description: link.description ?? "",
-            categoryId: link.category_id,
-            clicks: link.clicks,
-            createdAt: link.created_at,
-            updatedAt: link.updated_at,
-          }),
-        ),
-    }));
+    .map((category) =>
+      mapCategory(
+        category,
+        links
+          .filter((link) => link.category_id === category.id)
+          .sort((a, b) => a.title.localeCompare(b.title, "zh-CN"))
+          .map(mapLink),
+      ),
+    );
 }
 
 export async function getProfile(userId: string) {
@@ -140,7 +215,11 @@ export async function getProfile(userId: string) {
     return null;
   }
 
-  const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(profileSelectColumns)
+    .eq("id", userId)
+    .maybeSingle();
   if (error) {
     throw error;
   }
@@ -161,7 +240,7 @@ export async function upsertProfile(userId: string, username: string, passwordHi
       password_hint: passwordHint,
       updated_at: new Date().toISOString(),
     })
-    .select("*")
+    .select(profileSelectColumns)
     .single();
 
   if (error) {
@@ -214,8 +293,8 @@ export async function loadNavigation(userId: string) {
 
   const [{ data: categories, error: categoryError }, { data: links, error: linkError }] =
     await Promise.all([
-      supabase.from("categories").select("*").eq("user_id", userId).order("sort_order"),
-      supabase.from("links").select("*").eq("user_id", userId),
+      supabase.from("categories").select(categorySelectColumns).eq("user_id", userId).order("sort_order"),
+      supabase.from("links").select(linkSelectColumns).eq("user_id", userId),
     ]);
 
   if (categoryError) {
@@ -226,6 +305,105 @@ export async function loadNavigation(userId: string) {
   }
 
   return mapCategories(categories ?? [], links ?? []);
+}
+
+export async function loadCategories(userId: string) {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("categories")
+    .select(categorySelectColumns)
+    .eq("user_id", userId)
+    .order("sort_order");
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((category) => mapCategory(category));
+}
+
+export async function loadCategoryLinks(userId: string, categoryId: string) {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("links")
+    .select(linkSelectColumns)
+    .eq("user_id", userId)
+    .eq("category_id", categoryId)
+    .order("title");
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map(mapLink);
+}
+
+export async function loadAllLinks(userId: string) {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase.from("links").select(linkSelectColumns).eq("user_id", userId);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map(mapLink);
+}
+
+export async function searchLinks(userId: string, query: string, limit = 12) {
+  if (!supabase) {
+    return [];
+  }
+
+  const term = query.trim().replace(/[%_,()]/g, " ");
+  if (term.length < 2) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("links")
+    .select(linkSelectColumns)
+    .eq("user_id", userId)
+    .or(`title.ilike.%${term}%,url.ilike.%${term}%,description.ilike.%${term}%`)
+    .order("clicks", { ascending: false })
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map(mapLink);
+}
+
+export async function loadLinkIconData(userId: string, linkId: string) {
+  if (!supabase) {
+    return "";
+  }
+
+  const { data, error } = await supabase
+    .from("link_icons")
+    .select("icon_data")
+    .eq("user_id", userId)
+    .eq("link_id", linkId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingLinkIconsTable(error)) {
+      return "";
+    }
+    throw error;
+  }
+
+  return ((data as Pick<LinkIconRow, "icon_data"> | null)?.icon_data ?? "").trim();
 }
 
 export async function createDefaultNavigation(userId: string, categories: NavCategory[]) {
@@ -240,17 +418,30 @@ export async function createDefaultNavigation(userId: string, categories: NavCat
     sort_order: category.sortOrder,
   }));
 
-  const linkRows = categories.flatMap((category, categoryIndex) =>
+  const linksWithDatabaseIds = categories.flatMap((category, categoryIndex) =>
     category.links.map((link) => ({
-      user_id: userId,
-      category_id: categoryRows[categoryIndex].id,
-      title: link.title,
-      url: normalizeUrl(link.url),
-      icon_url: link.iconUrl ?? null,
-      description: link.description ?? "",
-      clicks: 0,
+      categoryId: categoryRows[categoryIndex].id,
+      databaseId: getDatabaseLinkId(link.id),
+      link,
     })),
   );
+  const linkRows = linksWithDatabaseIds.map(({ categoryId, databaseId, link }) => ({
+    id: databaseId,
+    user_id: userId,
+    category_id: categoryId,
+    title: link.title,
+    url: normalizeUrl(link.url),
+    icon_url: getPersistedIconUrl(link.iconUrl),
+    description: link.description ?? "",
+    clicks: 0,
+  }));
+  const iconRows = linksWithDatabaseIds
+      .map(({ databaseId, link }) => ({
+        link_id: databaseId,
+        user_id: userId,
+        icon_data: getIconDataUrl(link.iconDataUrl ?? link.iconUrl),
+      }))
+      .filter((row) => row.icon_data);
 
   const { error: categoryError } = await supabase.from("categories").insert(categoryRows);
   if (categoryError) {
@@ -258,6 +449,7 @@ export async function createDefaultNavigation(userId: string, categories: NavCat
   }
 
   await insertLinkRows(linkRows);
+  await upsertLinkIconRows(iconRows);
 }
 
 export async function importNavigation(userId: string, categories: NavCategory[]) {
@@ -302,17 +494,30 @@ export async function importNavigation(userId: string, categories: NavCategory[]
     sort_order: Date.now() + index,
   }));
 
-  const linkRows = dedupedCategories.flatMap((category, categoryIndex) =>
+  const linksWithDatabaseIds = dedupedCategories.flatMap((category, categoryIndex) =>
     category.links.map((link) => ({
-      user_id: userId,
-      category_id: categoryRows[categoryIndex].id,
-      title: link.title,
-      url: normalizeUrl(link.url),
-      icon_url: link.iconUrl ?? null,
-      description: link.description ?? "",
-      clicks: 0,
+      categoryId: categoryRows[categoryIndex].id,
+      databaseId: getDatabaseLinkId(link.id),
+      link,
     })),
   );
+  const linkRows = linksWithDatabaseIds.map(({ categoryId, databaseId, link }) => ({
+    id: databaseId,
+    user_id: userId,
+    category_id: categoryId,
+    title: link.title,
+    url: normalizeUrl(link.url),
+    icon_url: getPersistedIconUrl(link.iconUrl),
+    description: link.description ?? "",
+    clicks: 0,
+  }));
+  const iconRows = linksWithDatabaseIds
+      .map(({ databaseId, link }) => ({
+        link_id: databaseId,
+        user_id: userId,
+        icon_data: getIconDataUrl(link.iconDataUrl ?? link.iconUrl),
+      }))
+      .filter((row) => row.icon_data);
 
   const { error: categoryError } = await supabase.from("categories").insert(categoryRows);
   if (categoryError) {
@@ -324,12 +529,13 @@ export async function importNavigation(userId: string, categories: NavCategory[]
   }
 
   await insertLinkRows(linkRows);
+  await upsertLinkIconRows(iconRows);
   return { categories: categoryRows.length, links: linkRows.length, skipped };
 }
 
 export async function saveCategory(userId: string, value: CategoryFormValue) {
   if (!supabase) {
-    return;
+    return null;
   }
 
   const payload = {
@@ -340,10 +546,12 @@ export async function saveCategory(userId: string, value: CategoryFormValue) {
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("categories").upsert(payload);
+  const { data, error } = await supabase.from("categories").upsert(payload).select(categorySelectColumns).single();
   if (error) {
     throw error;
   }
+
+  return mapCategory(data);
 }
 
 export async function saveCategoryOrder(userId: string, categories: NavCategory[]) {
@@ -379,7 +587,7 @@ export async function deleteCategory(categoryId: string) {
 
 export async function saveLink(userId: string, value: LinkFormValue) {
   if (!supabase) {
-    return;
+    return null;
   }
 
   const payload = {
@@ -388,22 +596,38 @@ export async function saveLink(userId: string, value: LinkFormValue) {
     category_id: value.categoryId,
     title: value.title.trim(),
     url: normalizeUrl(value.url),
-    icon_url: value.iconUrl.trim() || null,
+    icon_url: getPersistedIconUrl(value.iconUrl),
     description: value.description.trim(),
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("links").upsert(payload);
+  const { data, error } = await supabase.from("links").upsert(payload).select(linkSelectColumns).single();
   if (error) {
     if (!isMissingIconColumn(error)) {
       throw error;
     }
 
-    const { error: retryError } = await supabase.from("links").upsert(stripIconUrl(payload));
+    const { data: retryData, error: retryError } = await supabase
+      .from("links")
+      .upsert(stripIconUrl(payload))
+      .select(linkSelectColumns)
+      .single();
     if (retryError) {
       throw retryError;
     }
+    const iconDataUrl = getIconDataUrl(value.iconDataUrl ?? value.iconUrl);
+    if (iconDataUrl) {
+      await upsertLinkIconRows([{ link_id: retryData.id, user_id: userId, icon_data: iconDataUrl }]);
+    }
+    return mapLink(retryData);
   }
+
+  const iconDataUrl = getIconDataUrl(value.iconDataUrl ?? value.iconUrl);
+  if (iconDataUrl) {
+    await upsertLinkIconRows([{ link_id: data.id, user_id: userId, icon_data: iconDataUrl }]);
+  }
+
+  return mapLink(data);
 }
 
 export async function deleteLink(linkId: string) {

@@ -1,32 +1,29 @@
 import { ExternalLink, Pencil, Trash2 } from "lucide-react";
 import { IconButton, Tooltip } from "@radix-ui/themes";
 import type { NavLink } from "../types";
-import { getLinkIconUrl } from "../lib/url";
 import { useEditMode } from "./EditModeContext";
+import { LinkIcon } from "./LinkIcon";
 
 type LinkRowProps = {
   link: NavLink;
   onOpen: (link: NavLink) => void;
   onEdit?: (link: NavLink) => void;
   onDelete?: (link: NavLink) => void;
+  userId?: string;
 };
 
 /** 三行式链接条目：favicon + 标题 / URL / 描述，hover 显示操作按钮，适配网格布局 */
-export function LinkRow({ link, onOpen, onEdit, onDelete }: LinkRowProps) {
+export function LinkRow({ link, onOpen, onEdit, onDelete, userId }: LinkRowProps) {
   const displayUrl = link.url.replace(/^https?:\/\//, "").replace(/^www\./, "");
   const { editMode } = useEditMode();
 
   return (
     <div className="group flex min-w-0 items-start gap-2.5 rounded-lg border border-slate-100 bg-white px-3 py-2.5 transition hover:border-slate-200 hover:bg-slate-50/60 hover:shadow-sm">
       {/* favicon */}
-      <img
-        alt=""
+      <LinkIcon
         className="mt-0.5 h-5 w-5 shrink-0 rounded"
-        loading="lazy"
-        src={getLinkIconUrl(link.url, link.iconUrl)}
-        onError={(e) => {
-          (e.target as HTMLImageElement).src = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%2394a3b8"><rect width="24" height="24" rx="4"/><path d="M10 6h8v8h-2V9.4L9.4 16 8 14.6 14.6 8H10V6z" fill="%23fff"/></svg>`;
-        }}
+        link={link}
+        userId={userId}
       />
 
       {/* 文字区域 */}

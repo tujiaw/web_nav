@@ -1,6 +1,7 @@
 import { normalizeUrl } from "./url";
 
 export type LinkMetadataResult = {
+  iconDataUrl: string;
   title: string;
   iconUrl: string;
   url: string;
@@ -18,6 +19,7 @@ export async function inspectLinkMetadata(url: string): Promise<LinkMetadataResu
   return {
     title: data.title ?? "",
     iconUrl: data.iconUrl ?? "",
+    iconDataUrl: data.iconDataUrl ?? "",
     url: data.url ?? normalizedUrl,
   };
 }

@@ -10,6 +10,7 @@ export type NavLink = {
   title: string;
   url: string;
   iconUrl?: string;
+  iconDataUrl?: string;
   description?: string;
   categoryId: string;
   clicks: number;
@@ -45,6 +46,7 @@ export type LinkFormValue = {
   title: string;
   url: string;
   iconUrl: string;
+  iconDataUrl?: string;
   description: string;
   categoryId: string;
 };

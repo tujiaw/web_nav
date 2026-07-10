@@ -2,13 +2,16 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import { ArrowUpRight, Globe2, Plus, Search } from "lucide-react";
 import { Button, Select, TextField } from "@radix-ui/themes";
 import { searchProviders } from "../data/defaults";
-import { getHostname, getLinkIconUrl } from "../lib/url";
+import { getHostname } from "../lib/url";
 import type { NavCategory, NavLink } from "../types";
+import { LinkIcon } from "./LinkIcon";
 
 type SearchPanelProps = {
   categories: NavCategory[];
   onAddLink: () => void;
+  onSearchIntent?: (query: string) => void;
   onOpenLink: (link: NavLink) => void;
+  userId?: string;
 };
 
 type SearchResult = { categoryName: string; link: NavLink; score: number };
@@ -29,7 +32,7 @@ function fuzzyScore(query: string, text: string) {
   return queryIndex === normalizedQuery.length ? Math.max(1, 500 - gap) : -1;
 }
 
-export function SearchPanel({ categories, onAddLink, onOpenLink }: SearchPanelProps) {
+export function SearchPanel({ categories, onAddLink, onOpenLink, onSearchIntent, userId }: SearchPanelProps) {
   const [providerId, setProviderId] = useState(searchProviders[0].id);
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(false);
@@ -115,8 +118,15 @@ export function SearchPanel({ categories, onAddLink, onOpenLink }: SearchPanelPr
         aria-expanded={showResults}
         className="min-w-0 flex-1"
         onBlur={() => window.setTimeout(() => setFocused(false), 120)}
-        onChange={(event) => setQuery(event.target.value)}
-        onFocus={() => setFocused(true)}
+        onChange={(event) => {
+          const nextQuery = event.target.value;
+          setQuery(nextQuery);
+          onSearchIntent?.(nextQuery);
+        }}
+        onFocus={() => {
+          setFocused(true);
+          onSearchIntent?.(query);
+        }}
         onKeyDown={handleKeyDown}
         placeholder="Search links or the web…"
         ref={inputRef}
@@ -131,7 +141,7 @@ export function SearchPanel({ categories, onAddLink, onOpenLink }: SearchPanelPr
         <div className="absolute left-24 right-[72px] top-[calc(100%+8px)] z-50 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl" id="web-nav-search-results" role="listbox">
           {siteResults.map((result, index) => (
             <button className={`flex w-full items-center gap-2.5 px-3 py-2 text-left ${index === activeIndex ? "bg-teal-50" : "hover:bg-slate-50"}`} key={result.link.id} onMouseDown={(event) => event.preventDefault()} onClick={() => onOpenLink(result.link)} role="option" type="button">
-              <img alt="" className="h-5 w-5 rounded" src={getLinkIconUrl(result.link.url, result.link.iconUrl)} />
+              <LinkIcon className="h-5 w-5 rounded" link={result.link} userId={userId} />
               <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{result.link.title}</span><span className="block truncate text-xs text-slate-400">{result.categoryName} · {getHostname(result.link.url)}</span></span>
               <ArrowUpRight className="text-slate-400" size={14} />
             </button>

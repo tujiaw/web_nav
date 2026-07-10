@@ -1,4 +1,5 @@
 create extension if not exists "pgcrypto";
+create extension if not exists "pg_trgm";
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -40,17 +41,45 @@ create table if not exists public.user_configs (
   unique (user_id, key)
 );
 
+create table if not exists public.link_icons (
+  link_id uuid primary key references public.links(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  icon_data text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists categories_user_id_idx on public.categories(user_id);
 create index if not exists links_user_id_idx on public.links(user_id);
 create index if not exists links_category_id_idx on public.links(category_id);
+create index if not exists links_user_category_title_idx on public.links(user_id, category_id, title);
+create index if not exists links_user_clicks_updated_idx on public.links(user_id, clicks desc, updated_at desc);
+create index if not exists links_title_trgm_idx on public.links using gin (title gin_trgm_ops);
+create index if not exists links_url_trgm_idx on public.links using gin (url gin_trgm_ops);
+create index if not exists links_description_trgm_idx on public.links using gin (description gin_trgm_ops);
 create index if not exists user_configs_user_id_idx on public.user_configs(user_id);
+create index if not exists link_icons_user_id_idx on public.link_icons(user_id);
 
 alter table public.links add column if not exists icon_url text;
+
+insert into public.link_icons (link_id, user_id, icon_data, updated_at)
+select id, user_id, icon_url, now()
+from public.links
+where icon_url like 'data:image/%'
+on conflict (link_id) do update
+set icon_data = excluded.icon_data,
+    updated_at = excluded.updated_at;
+
+update public.links
+set icon_url = null,
+    updated_at = now()
+where icon_url like 'data:image/%';
 
 alter table public.profiles enable row level security;
 alter table public.categories enable row level security;
 alter table public.links enable row level security;
 alter table public.user_configs enable row level security;
+alter table public.link_icons enable row level security;
 
 create policy "profiles_select_own"
   on public.profiles for select
@@ -130,4 +159,37 @@ create policy "user_configs_update_own"
 
 create policy "user_configs_delete_own"
   on public.user_configs for delete
+  using (auth.uid() = user_id);
+
+create policy "link_icons_select_own"
+  on public.link_icons for select
+  using (auth.uid() = user_id);
+
+create policy "link_icons_insert_own"
+  on public.link_icons for insert
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1
+      from public.links
+      where links.id = link_icons.link_id
+        and links.user_id = auth.uid()
+    )
+  );
+
+create policy "link_icons_update_own"
+  on public.link_icons for update
+  using (auth.uid() = user_id)
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1
+      from public.links
+      where links.id = link_icons.link_id
+        and links.user_id = auth.uid()
+    )
+  );
+
+create policy "link_icons_delete_own"
+  on public.link_icons for delete
   using (auth.uid() = user_id);

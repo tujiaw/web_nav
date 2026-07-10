@@ -1,4 +1,5 @@
 export type LinkMetadata = {
+  iconDataUrl: string;
   title: string;
   iconUrl: string;
   url: string;
@@ -119,7 +120,8 @@ export async function fetchLinkMetadata(inputUrl: string): Promise<LinkMetadata>
 
   return {
     title: getTitle(head, html) || parsed.hostname.replace(/^www\./, ""),
-    iconUrl: await fetchIconAsDataUrl(iconUrl),
+    iconUrl: iconUrl.startsWith("data:image/") ? "" : iconUrl,
+    iconDataUrl: await fetchIconAsDataUrl(iconUrl),
     url: response.url || url,
   };
 }
