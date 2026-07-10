@@ -125,3 +125,32 @@ export async function fetchLinkMetadata(inputUrl: string): Promise<LinkMetadata>
     url: response.url || url,
   };
 }
+
+export async function fetchIconUrlOnly(inputUrl: string): Promise<string> {
+  const url = normalizeInputUrl(inputUrl);
+  const parsed = new URL(url);
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return "";
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0 (compatible; WebNavMetadataBot/1.0)",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!response.ok) return "";
+
+    const html = await response.text();
+    const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? html.slice(0, 20000);
+
+    const iconUrl = getIconUrl(head, response.url || url);
+    return iconUrl.startsWith("data:image/") ? "" : iconUrl;
+  } catch {
+    return "";
+  }
+}

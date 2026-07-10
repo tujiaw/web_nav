@@ -32,17 +32,14 @@ import {
   getProfile,
   importNavigation,
   incrementClicks,
-  loadAllLinks,
-  loadCategories,
-  loadCategoryLinks,
+  loadNavigation,
   moveLinksToCategories,
   saveCategory,
   saveCategoryOrder,
   saveLink,
-  searchLinks,
   upsertProfile,
 } from "./lib/navStore";
-import { isSupabaseConfigured } from "./lib/supabase";
+import { isSupabaseConfigured, supabase } from "./lib/supabase";
 import { parseBookmarkHtml } from "./lib/bookmarkImport";
 import { normalizeUrl } from "./lib/url";
 import { downloadNavigation } from "./lib/navigationExport";
@@ -197,9 +194,6 @@ function AppContent() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [bookmarkFile, setBookmarkFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadedCategoryIds, setLoadedCategoryIds] = useState<Set<string>>(() => new Set());
-  const [loadingCategoryIds, setLoadingCategoryIds] = useState<Set<string>>(() => new Set());
-  const [allLinksLoaded, setAllLinksLoaded] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState("");
   const [error, setError] = useState("");
@@ -208,10 +202,6 @@ function AppContent() {
   const [bingWallpaperEnabled, setBingWallpaperEnabled] = useState(() => localStorage.getItem(BING_WALLPAPER_STORAGE_KEY) === "true");
   const [bingWallpaperUrl, setBingWallpaperUrl] = useState("");
   const bookmarkInputRef = useRef<HTMLInputElement | null>(null);
-  const loadingCategoryIdsRef = useRef(new Set<string>());
-  const allLinksPromiseRef = useRef<Promise<NavCategory[]> | null>(null);
-  const searchRequestIdRef = useRef(0);
-  const searchDebounceRef = useRef<number | null>(null);
   const { editMode, toggleEditMode } = useEditMode();
 
   const userId = user?.id ?? "";
@@ -226,6 +216,81 @@ function AppContent() {
     [allLinks],
   );
 
+  // One-shot icon refresh: run `window.__refreshAllIcons()` in the browser console
+  useEffect(() => {
+    if (!userId || !supabase) return;
+
+    async function refreshAllIcons() {
+      const isValidIconUrl = (value?: string) => value && /^https?:\/\//i.test(value);
+
+      // Deduplicate by URL, skip links that already have a valid icon_url
+      const pendingByUrl = new Map<string, NavLink[]>();
+      let skipped = 0;
+      allLinks.forEach((link) => {
+        if (isValidIconUrl(link.iconUrl)) {
+          skipped++;
+          return;
+        }
+        const list = pendingByUrl.get(link.url) ?? [];
+        list.push(link);
+        pendingByUrl.set(link.url, list);
+      });
+
+      const pendingUrls = Array.from(pendingByUrl.keys());
+      console.log(`[refreshIcons] ${skipped} links already have icon, ${pendingUrls.length} unique URLs to fetch...`);
+
+      if (pendingUrls.length === 0) {
+        console.log("[refreshIcons] Nothing to do.");
+        return;
+      }
+
+      // Process in parallel with concurrency limit
+      const concurrency = 5;
+      const batchSize = 10;
+      const batches: string[][] = [];
+      for (let i = 0; i < pendingUrls.length; i += batchSize) {
+        batches.push(pendingUrls.slice(i, i + batchSize));
+      }
+
+      const results: Record<string, string> = {};
+      let done = 0;
+      async function processBatch(batch: string[]) {
+        const resp = await fetch("/api/batch-icon-urls", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls: batch }),
+        });
+        const data = (await resp.json()) as { results: Record<string, string> };
+        Object.assign(results, data.results);
+        done += batch.length;
+        console.log(`[refreshIcons] ${Math.min(done, pendingUrls.length)}/${pendingUrls.length} URLs done`);
+      }
+
+      for (let i = 0; i < batches.length; i += concurrency) {
+        await Promise.all(batches.slice(i, i + concurrency).map(processBatch));
+      }
+
+      // Batch update Supabase
+      let updated = 0;
+      const updates: Promise<void>[] = [];
+      for (const [url, iconUrl] of Object.entries(results)) {
+        if (!iconUrl) continue;
+        const links = pendingByUrl.get(url) ?? [];
+        for (const link of links) {
+          updates.push(
+            supabase.from("links").update({ icon_url: iconUrl, updated_at: new Date().toISOString() }).eq("id", link.id).then(() => { updated++; }),
+          );
+        }
+      }
+      await Promise.all(updates);
+
+      console.log(`[refreshIcons] Done. Updated ${updated} links. Reload the page to see changes.`);
+    }
+
+    (window as any).__refreshAllIcons = refreshAllIcons;
+    return () => { delete (window as any).__refreshAllIcons; };
+  }, [allLinks, userId]);
+
   const filteredCategories = categories;
   const pageBackgroundStyle = bingWallpaperEnabled && bingWallpaperUrl
     ? {
@@ -235,12 +300,6 @@ function AppContent() {
         backgroundSize: "cover",
       }
     : undefined;
-
-  const replaceCategoryLinks = useCallback((categoryId: string, links: NavLink[]) => {
-    setCategories((current) =>
-      current.map((category) => (category.id === categoryId ? { ...category, links } : category)),
-    );
-  }, []);
 
   const refresh = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!userId) {
@@ -253,19 +312,14 @@ function AppContent() {
       setLoading(true);
     }
     try {
-      const [nextProfile, nextCategories] = await Promise.all([getProfile(userId), loadCategories(userId)]);
+      const [nextProfile, nextNavigation] = await Promise.all([getProfile(userId), loadNavigation(userId)]);
 
-      if (nextCategories.length === 0) {
+      if (nextNavigation.length === 0) {
         await createDefaultNavigation(userId, defaultCategories);
-        setCategories(await loadCategories(userId));
+        setCategories(await loadNavigation(userId));
       } else {
-        setCategories(nextCategories);
+        setCategories(nextNavigation);
       }
-      setLoadedCategoryIds(new Set());
-      loadingCategoryIdsRef.current.clear();
-      setLoadingCategoryIds(new Set());
-      allLinksPromiseRef.current = null;
-      setAllLinksLoaded(false);
 
       if (nextProfile) {
         setProfile(nextProfile);
@@ -281,118 +335,6 @@ function AppContent() {
     }
   }, [fallbackName, userId]);
 
-  const loadActiveCategoryLinks = useCallback(async (categoryId: string) => {
-    if (!userId || guestMode || loadedCategoryIds.has(categoryId) || loadingCategoryIdsRef.current.has(categoryId)) {
-      return;
-    }
-
-    loadingCategoryIdsRef.current.add(categoryId);
-    setLoadingCategoryIds(new Set(loadingCategoryIdsRef.current));
-    try {
-      const links = await loadCategoryLinks(userId, categoryId);
-      replaceCategoryLinks(categoryId, links);
-      setLoadedCategoryIds((current) => new Set(current).add(categoryId));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "加载分类链接失败");
-    } finally {
-      loadingCategoryIdsRef.current.delete(categoryId);
-      setLoadingCategoryIds(new Set(loadingCategoryIdsRef.current));
-    }
-  }, [guestMode, loadedCategoryIds, replaceCategoryLinks, userId]);
-
-  const ensureAllLinksLoaded = useCallback(async () => {
-    if (guestMode || !userId || allLinksLoaded) {
-      return categories;
-    }
-    if (allLinksPromiseRef.current) {
-      return allLinksPromiseRef.current;
-    }
-
-    const loadPromise = (async () => {
-      const links = await loadAllLinks(userId);
-      const groupedLinks = new Map<string, NavLink[]>();
-      links.forEach((link) => {
-        const group = groupedLinks.get(link.categoryId) ?? [];
-        group.push(link);
-        groupedLinks.set(link.categoryId, group);
-      });
-
-      const nextCategories = categories.map((category) => ({
-        ...category,
-        links: (groupedLinks.get(category.id) ?? []).sort((a, b) => a.title.localeCompare(b.title, "zh-CN")),
-      }));
-      setCategories(nextCategories);
-      setLoadedCategoryIds(new Set(nextCategories.map((category) => category.id)));
-      setAllLinksLoaded(true);
-      return nextCategories;
-    })();
-    allLinksPromiseRef.current = loadPromise;
-
-    try {
-      return await loadPromise;
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "加载全部链接失败");
-      return categories;
-    } finally {
-      allLinksPromiseRef.current = null;
-    }
-  }, [allLinksLoaded, categories, guestMode, userId]);
-
-  const mergeLinksIntoCategories = useCallback((links: NavLink[]) => {
-    if (links.length === 0) {
-      return;
-    }
-
-    setCategories((current) =>
-      current.map((category) => {
-        const additions = links.filter((link) => link.categoryId === category.id);
-        if (additions.length === 0) {
-          return category;
-        }
-
-        const existingIds = new Set(category.links.map((link) => link.id));
-        const mergedLinks = [
-          ...category.links.filter((link) => !additions.some((addition) => addition.id === link.id)),
-          ...additions.filter((link) => !existingIds.has(link.id) || category.links.some((item) => item.id === link.id)),
-        ];
-
-        return {
-          ...category,
-          links: mergedLinks.sort((a, b) => a.title.localeCompare(b.title, "zh-CN")),
-        };
-      }),
-    );
-  }, []);
-
-  const handleSearchIntent = useCallback((query: string) => {
-    if (guestMode || !userId || allLinksLoaded) {
-      return;
-    }
-
-    const trimmedQuery = query.trim();
-    if (trimmedQuery.length < 2) {
-      return;
-    }
-
-    if (searchDebounceRef.current !== null) {
-      window.clearTimeout(searchDebounceRef.current);
-    }
-
-    const requestId = searchRequestIdRef.current + 1;
-    searchRequestIdRef.current = requestId;
-    searchDebounceRef.current = window.setTimeout(() => {
-      void searchLinks(userId, trimmedQuery).then((links) => {
-        if (searchRequestIdRef.current === requestId) {
-          mergeLinksIntoCategories(links);
-        }
-      }).catch((reason) => {
-        if (searchRequestIdRef.current === requestId) {
-          setError(reason instanceof Error ? reason.message : "搜索链接失败");
-        }
-      });
-    }, 250);
-  }, [allLinksLoaded, guestMode, mergeLinksIntoCategories, userId]);
-
   useEffect(() => {
     if (authLoading) {
       return;
@@ -401,8 +343,6 @@ function AppContent() {
     if (guestMode && !userId) {
       const nextCategories = loadGuestNavigation();
       setCategories(nextCategories);
-      setLoadedCategoryIds(new Set(nextCategories.map((category) => category.id)));
-      setAllLinksLoaded(true);
       setProfile(null);
       setLoading(false);
       return;
@@ -410,8 +350,6 @@ function AppContent() {
 
     if (!userId) {
       setCategories([]);
-      setLoadedCategoryIds(new Set());
-      setAllLinksLoaded(false);
       setLoading(false);
       return;
     }
@@ -424,14 +362,6 @@ function AppContent() {
       localStorage.setItem(GUEST_NAVIGATION_STORAGE_KEY, JSON.stringify(categories));
     }
   }, [categories, guestMode, userId]);
-
-  useEffect(() => {
-    return () => {
-      if (searchDebounceRef.current !== null) {
-        window.clearTimeout(searchDebounceRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     localStorage.setItem(BING_WALLPAPER_STORAGE_KEY, String(bingWallpaperEnabled));
@@ -477,14 +407,6 @@ function AppContent() {
     }
   }, [activeCategoryId, categories]);
 
-  useEffect(() => {
-    if (!activeCategoryId) {
-      return;
-    }
-
-    void loadActiveCategoryLinks(activeCategoryId);
-  }, [activeCategoryId, loadActiveCategoryLinks]);
-
   async function handleOpenLink(link: NavLink) {
     window.open(normalizeUrl(link.url), "_blank", "noopener,noreferrer");
     setCategories((current) =>
@@ -497,11 +419,7 @@ function AppContent() {
     );
 
     if (guestMode) return;
-    try {
-      await incrementClicks(link);
-    } catch {
-      await loadActiveCategoryLinks(link.categoryId);
-    }
+    incrementClicks(link).catch(() => {});
   }
 
   async function handleSaveLink(value: LinkFormValue) {
@@ -530,7 +448,6 @@ function AppContent() {
           };
         }),
       );
-      setLoadedCategoryIds((current) => new Set(current).add(savedLink.categoryId));
     }
     setDialog(null);
   }
@@ -560,7 +477,6 @@ function AppContent() {
         }
         return [...current, savedCategory].sort((a, b) => a.sortOrder - b.sortOrder);
       });
-      setLoadedCategoryIds((current) => new Set(current).add(savedCategory.id));
     }
     setDialog(null);
   }
@@ -651,11 +567,6 @@ function AppContent() {
       if ("links" in deleteTarget) {
         await deleteCategory(deleteTarget.id);
         setCategories((current) => current.filter((category) => category.id !== deleteTarget.id));
-        setLoadedCategoryIds((current) => {
-          const next = new Set(current);
-          next.delete(deleteTarget.id);
-          return next;
-        });
       } else {
         await deleteLink(deleteTarget.id);
         setCategories((current) =>
@@ -682,14 +593,12 @@ function AppContent() {
     setDialog(null);
   }
 
-  async function handleOpenAiOrganize() {
-    await ensureAllLinksLoaded();
+  function handleOpenAiOrganize() {
     setAiOrganizeOpen(true);
   }
 
-  async function handleExportNavigation(format: "html" | "json") {
-    const navigation = await ensureAllLinksLoaded();
-    downloadNavigation(navigation, format);
+  function handleExportNavigation(format: "html" | "json") {
+    downloadNavigation(categories, format);
   }
 
   async function handleChooseBookmarkFile() {
@@ -808,7 +717,6 @@ function AppContent() {
               categories={categories}
               onAddLink={() => setDialog({ type: "link" })}
               onOpenLink={handleOpenLink}
-              onSearchIntent={handleSearchIntent}
               userId={userId}
             />
           </div>
@@ -842,7 +750,7 @@ function AppContent() {
                 {editMode ? (
                   <>
                     <DropdownMenu.Separator />
-                    <DropdownMenu.Item onSelect={() => void handleOpenAiOrganize()}>
+                    <DropdownMenu.Item onSelect={() => handleOpenAiOrganize()}>
                       <Sparkles size={15} />
                       AI 整理导航
                     </DropdownMenu.Item>
@@ -861,8 +769,8 @@ function AppContent() {
                     <DropdownMenu.Sub>
                       <DropdownMenu.SubTrigger><Download size={15} />导出数据</DropdownMenu.SubTrigger>
                       <DropdownMenu.SubContent>
-                        <DropdownMenu.Item onSelect={() => void handleExportNavigation("html")}>浏览器书签 HTML</DropdownMenu.Item>
-                        <DropdownMenu.Item onSelect={() => void handleExportNavigation("json")}>Web Nav JSON</DropdownMenu.Item>
+                        <DropdownMenu.Item onSelect={() => handleExportNavigation("html")}>浏览器书签 HTML</DropdownMenu.Item>
+                        <DropdownMenu.Item onSelect={() => handleExportNavigation("json")}>Web Nav JSON</DropdownMenu.Item>
                       </DropdownMenu.SubContent>
                     </DropdownMenu.Sub>
                   </>
@@ -944,7 +852,7 @@ function AppContent() {
                       >
                         <span className="min-w-0 max-w-[128px] truncate">{category.name}</span>
                         <span className="ml-1 text-xs opacity-70">
-                          {loadedCategoryIds.has(category.id) ? category.links.length : "..."}
+                          {category.links.length}
                         </span>
                       </Tabs.Trigger>
                       {editMode && category.id === activeCategoryId ? (
@@ -991,7 +899,7 @@ function AppContent() {
                 <Tabs.Content className="pt-4" key={category.id} value={category.id}>
                   <CategorySection
                     category={category}
-                    isLoading={loadingCategoryIds.has(category.id) || !loadedCategoryIds.has(category.id)}
+                    isLoading={false}
                     onAddLink={(categoryId) => setDialog({ type: "link", categoryId })}
                     onDeleteLink={setDeleteTarget}
                     onEditLink={(link) => setDialog({ type: "link", link })}

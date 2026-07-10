@@ -9,7 +9,6 @@ import { LinkIcon } from "./LinkIcon";
 type SearchPanelProps = {
   categories: NavCategory[];
   onAddLink: () => void;
-  onSearchIntent?: (query: string) => void;
   onOpenLink: (link: NavLink) => void;
   userId?: string;
 };
@@ -32,7 +31,7 @@ function fuzzyScore(query: string, text: string) {
   return queryIndex === normalizedQuery.length ? Math.max(1, 500 - gap) : -1;
 }
 
-export function SearchPanel({ categories, onAddLink, onOpenLink, onSearchIntent, userId }: SearchPanelProps) {
+export function SearchPanel({ categories, onAddLink, onOpenLink, userId }: SearchPanelProps) {
   const [providerId, setProviderId] = useState(searchProviders[0].id);
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(false);
@@ -119,13 +118,10 @@ export function SearchPanel({ categories, onAddLink, onOpenLink, onSearchIntent,
         className="min-w-0 flex-1"
         onBlur={() => window.setTimeout(() => setFocused(false), 120)}
         onChange={(event) => {
-          const nextQuery = event.target.value;
-          setQuery(nextQuery);
-          onSearchIntent?.(nextQuery);
+          setQuery(event.target.value);
         }}
         onFocus={() => {
           setFocused(true);
-          onSearchIntent?.(query);
         }}
         onKeyDown={handleKeyDown}
         placeholder="Search links or the web…"
