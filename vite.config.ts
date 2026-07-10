@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { organizeNavigationWithAi } from "./src/server/aiOrganize";
 import { fetchBingWallpaper } from "./src/server/bingWallpaper";
 import { fetchLinkMetadata } from "./src/server/linkMetadata";
 
@@ -64,6 +65,30 @@ export default defineConfig({
             response.statusCode = 502;
             response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Fetch failed" }));
           }
+        });
+
+        server.middlewares.use("/api/ai-organize", async (request, response) => {
+          response.setHeader("Content-Type", "application/json");
+          response.setHeader("Cache-Control", "no-store");
+
+          if (request.method !== "POST") {
+            response.statusCode = 405;
+            response.end(JSON.stringify({ error: "Method not allowed" }));
+            return;
+          }
+
+          let rawBody = "";
+          request.on("data", (chunk) => {
+            rawBody += chunk;
+          });
+          request.on("end", async () => {
+            try {
+              response.end(JSON.stringify({ items: await organizeNavigationWithAi(JSON.parse(rawBody)) }));
+            } catch (error) {
+              response.statusCode = 400;
+              response.end(JSON.stringify({ error: error instanceof Error ? error.message : "AI organize failed" }));
+            }
+          });
         });
       },
     },

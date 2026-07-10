@@ -32,6 +32,14 @@ export type Profile = {
   updatedAt: string;
 };
 
+export type LlmConfig = {
+  apiKey: string;
+  baseUrl: string;
+  disableThinking?: boolean;
+  model: string;
+  providerName: string;
+};
+
 export type LinkFormValue = {
   id?: string;
   title: string;

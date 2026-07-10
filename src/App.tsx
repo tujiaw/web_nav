@@ -1,6 +1,7 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Eye,
+  Download,
   FolderPlus,
   Github,
   LayoutDashboard,
@@ -10,12 +11,14 @@ import {
   Upload,
   Plus,
   ShieldCheck,
+  Sparkles,
   Settings,
   Trash2,
   UserRound,
 } from "lucide-react";
-import { AlertDialog, Button, Callout, Dialog, DropdownMenu, IconButton, Switch, Tabs, Theme, Tooltip } from "@radix-ui/themes";
+import { AlertDialog, Button, Callout, Dialog, DropdownMenu, IconButton, Switch, Tabs, TextField, Theme, Tooltip } from "@radix-ui/themes";
 import { CategorySection } from "./components/CategorySection";
+import { AiOrganizeDialog } from "./components/AiOrganizeDialog";
 import { EmptyState } from "./components/EmptyState";
 import { CategoryForm, LinkForm, ProfileForm } from "./components/Forms";
 import { RecentLinks } from "./components/RecentLinks";
@@ -30,6 +33,7 @@ import {
   importNavigation,
   incrementClicks,
   loadNavigation,
+  moveLinksToCategories,
   saveCategory,
   saveCategoryOrder,
   saveLink,
@@ -38,6 +42,7 @@ import {
 import { isSupabaseConfigured } from "./lib/supabase";
 import { parseBookmarkHtml } from "./lib/bookmarkImport";
 import { normalizeUrl } from "./lib/url";
+import { downloadNavigation } from "./lib/navigationExport";
 import { EditModeProvider, useEditMode } from "./components/EditModeContext";
 import type { CategoryFormValue, LinkFormValue, NavCategory, NavLink, Profile } from "./types";
 
@@ -63,9 +68,11 @@ function getDisplayName(userName?: string | null, email?: string | null) {
   return userName || email?.split("@")[0] || "我的导航";
 }
 
-function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
+function LoginScreen({ onContinueLocal, onEmailLogin, onLogin }: { onContinueLocal: () => void; onEmailLogin: (email: string) => Promise<void>; onLogin: () => Promise<void> }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
 
   async function handleLogin() {
     setLoading(true);
@@ -74,6 +81,21 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
       await onLogin();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "登录失败，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleEmailLogin(event: React.FormEvent) {
+    event.preventDefault();
+    if (!email.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      await onEmailLogin(email);
+      setEmailSent(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "发送登录邮件失败");
     } finally {
       setLoading(false);
     }
@@ -120,10 +142,18 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
               <p className="mt-3 text-sm leading-6 text-slate-500">使用 GitHub 登录后，配置会自动关联到当前账号。</p>
             </div>
             {isSupabaseConfigured ? (
-              <Button className="h-11 w-full bg-slate-950 font-semibold text-white hover:bg-slate-800" disabled={loading} onClick={handleLogin} size="3">
-                {loading ? <Loader2 className="animate-spin" size={18} /> : <Github size={18} />}
-                {loading ? "正在跳转..." : "使用 GitHub 登录"}
-              </Button>
+              <div className="space-y-4">
+                <Button className="h-11 w-full bg-slate-950 font-semibold text-white hover:bg-slate-800" disabled={loading} onClick={handleLogin} size="3">
+                  <Github size={18} />使用 GitHub 登录
+                </Button>
+                <div className="flex items-center gap-3 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" />OR<span className="h-px flex-1 bg-slate-200" /></div>
+                <form className="flex gap-2" onSubmit={handleEmailLogin}>
+                  <TextField.Root className="min-w-0 flex-1" onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" type="email" value={email} />
+                  <Button disabled={loading || !email.trim()} type="submit" variant="soft">Email link</Button>
+                </form>
+                {emailSent ? <p className="text-sm text-teal-700">登录链接已发送，请检查邮箱。</p> : null}
+                <Button className="w-full" color="gray" onClick={onContinueLocal} variant="ghost">无需登录，本地使用</Button>
+              </div>
             ) : (
               <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
                 请先配置 <code>VITE_SUPABASE_URL</code> 和 <code>VITE_SUPABASE_ANON_KEY</code>，再启用 GitHub 登录。
@@ -137,11 +167,29 @@ function LoginScreen({ onLogin }: { onLogin: () => Promise<void> }) {
   );
 }
 
+const GUEST_MODE_STORAGE_KEY = "web-nav-guest-mode";
+const GUEST_NAVIGATION_STORAGE_KEY = "web-nav-local-navigation";
+
+function cloneDefaultNavigation() {
+  return defaultCategories.map((category) => ({ ...category, links: category.links.map((link) => ({ ...link })) }));
+}
+
+function loadGuestNavigation() {
+  try {
+    const stored = localStorage.getItem(GUEST_NAVIGATION_STORAGE_KEY);
+    return stored ? JSON.parse(stored) as NavCategory[] : cloneDefaultNavigation();
+  } catch {
+    return cloneDefaultNavigation();
+  }
+}
+
 function AppContent() {
-  const { loading: authLoading, signInWithGitHub, signOut, user } = useAuth();
+  const { loading: authLoading, signInWithEmail, signInWithGitHub, signOut, user } = useAuth();
+  const [guestMode, setGuestMode] = useState(() => localStorage.getItem(GUEST_MODE_STORAGE_KEY) === "true");
   const [categories, setCategories] = useState<NavCategory[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [aiOrganizeOpen, setAiOrganizeOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NavLink | NavCategory | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [bookmarkFile, setBookmarkFile] = useState<File | null>(null);
@@ -217,13 +265,26 @@ function AppContent() {
       return;
     }
 
+    if (guestMode && !userId) {
+      setCategories(loadGuestNavigation());
+      setProfile(null);
+      setLoading(false);
+      return;
+    }
+
     if (!userId) {
       setLoading(false);
       return;
     }
 
     refresh();
-  }, [authLoading, refresh, userId]);
+  }, [authLoading, guestMode, refresh, userId]);
+
+  useEffect(() => {
+    if (guestMode && !userId && categories.length > 0) {
+      localStorage.setItem(GUEST_NAVIGATION_STORAGE_KEY, JSON.stringify(categories));
+    }
+  }, [categories, guestMode, userId]);
 
   useEffect(() => {
     localStorage.setItem(BING_WALLPAPER_STORAGE_KEY, String(bingWallpaperEnabled));
@@ -280,6 +341,7 @@ function AppContent() {
       })),
     );
 
+    if (guestMode) return;
     try {
       await incrementClicks(link);
     } catch {
@@ -288,6 +350,13 @@ function AppContent() {
   }
 
   async function handleSaveLink(value: LinkFormValue) {
+    if (guestMode) {
+      const now = new Date().toISOString();
+      const nextLink: NavLink = { id: value.id ?? crypto.randomUUID(), title: value.title.trim(), url: normalizeUrl(value.url), iconUrl: value.iconUrl.trim() || undefined, description: value.description.trim(), categoryId: value.categoryId, clicks: 0, createdAt: now, updatedAt: now };
+      setCategories((current) => current.map((category) => ({ ...category, links: category.id === value.categoryId ? [...category.links.filter((link) => link.id !== nextLink.id), nextLink] : category.links.filter((link) => link.id !== nextLink.id) })));
+      setDialog(null);
+      return;
+    }
     if (!user) {
       return;
     }
@@ -298,6 +367,13 @@ function AppContent() {
   }
 
   async function handleSaveCategory(value: CategoryFormValue) {
+    if (guestMode) {
+      setCategories((current) => value.id
+        ? current.map((category) => category.id === value.id ? { ...category, name: value.name.trim() } : category)
+        : [...current, { id: crypto.randomUUID(), name: value.name.trim(), sortOrder: Date.now(), links: [] }]);
+      setDialog(null);
+      return;
+    }
     if (!user) {
       return;
     }
@@ -308,7 +384,7 @@ function AppContent() {
   }
 
   async function handleReorderCategory(targetCategoryId: string) {
-    if (!user || !draggingCategoryId || draggingCategoryId === targetCategoryId) {
+    if ((!user && !guestMode) || !draggingCategoryId || draggingCategoryId === targetCategoryId) {
       setDraggingCategoryId("");
       return;
     }
@@ -331,12 +407,28 @@ function AppContent() {
     setDraggingCategoryId("");
     setCategories(orderedCategories);
 
+    if (guestMode) return;
     try {
-      await saveCategoryOrder(user.id, orderedCategories);
+      await saveCategoryOrder(user!.id, orderedCategories);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "调整分类顺序失败");
       await refresh({ showLoading: false });
     }
+  }
+
+  async function handleApplyAiOrganize(suggestions: Array<{ linkId: string; targetCategoryId: string }>) {
+    if (!user) {
+      return;
+    }
+
+    await moveLinksToCategories(
+      user.id,
+      suggestions.map((suggestion) => ({
+        linkId: suggestion.linkId,
+        categoryId: suggestion.targetCategoryId,
+      })),
+    );
+    await refresh({ showLoading: false });
   }
 
   async function confirmDelete() {
@@ -344,6 +436,13 @@ function AppContent() {
       return;
     }
 
+    if (guestMode) {
+      setCategories((current) => "links" in deleteTarget
+        ? current.filter((category) => category.id !== deleteTarget.id)
+        : current.map((category) => ({ ...category, links: category.links.filter((link) => link.id !== deleteTarget.id) })));
+      setDeleteTarget(null);
+      return;
+    }
     try {
       if ("links" in deleteTarget) {
         await deleteCategory(deleteTarget.id);
@@ -409,7 +508,7 @@ function AppContent() {
   }
 
   async function handleImportBookmarks() {
-    if (!userId) {
+    if (!userId && !guestMode) {
       return;
     }
     if (!bookmarkFile) {
@@ -422,10 +521,22 @@ function AppContent() {
     setImportResult("");
     try {
       const parsedCategories = parseBookmarkHtml(await bookmarkFile.text());
-      const result = await importNavigation(userId, parsedCategories);
-      setImportResult(`已导入 ${result.links} 个链接、${result.categories} 个分类，跳过 ${result.skipped} 个重复链接。`);
+      if (guestMode) {
+        const existingUrls = new Set(allLinks.map((link) => normalizeUrl(link.url)));
+        let imported = 0;
+        const additions = parsedCategories.map((category) => ({ ...category, links: category.links.filter((link) => {
+          const url = normalizeUrl(link.url);
+          if (existingUrls.has(url)) return false;
+          existingUrls.add(url); imported += 1; return true;
+        }) })).filter((category) => category.links.length > 0);
+        setCategories((current) => [...current, ...additions]);
+        setImportResult(`已导入 ${imported} 个链接、${additions.length} 个分类。`);
+      } else {
+        const result = await importNavigation(userId, parsedCategories);
+        setImportResult(`已导入 ${result.links} 个链接、${result.categories} 个分类，跳过 ${result.skipped} 个重复链接。`);
+        await refresh({ showLoading: false });
+      }
       setBookmarkFile(null);
-      await refresh({ showLoading: false });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "导入失败");
     } finally {
@@ -449,8 +560,8 @@ function AppContent() {
     );
   }
 
-  if (!user) {
-    return <LoginScreen onLogin={signInWithGitHub} />;
+  if (!user && !guestMode) {
+    return <LoginScreen onContinueLocal={() => { localStorage.setItem(GUEST_MODE_STORAGE_KEY, "true"); setGuestMode(true); }} onEmailLogin={signInWithEmail} onLogin={signInWithGitHub} />;
   }
 
   return (
@@ -468,7 +579,7 @@ function AppContent() {
 
           {/* 搜索栏 */}
           <div className="flex flex-1 justify-center">
-            <SearchPanel links={allLinks} onOpenLink={handleOpenLink} />
+            <SearchPanel categories={categories} onAddLink={() => setDialog({ type: "link" })} onOpenLink={handleOpenLink} />
           </div>
 
           {/* 右侧操作 */}
@@ -494,12 +605,16 @@ function AppContent() {
               </DropdownMenu.Trigger>
               <DropdownMenu.Content align="end" className="min-w-[180px]">
                 <div className="px-3 py-2">
-                  <p className="truncate text-sm font-semibold text-slate-950">{profile?.username ?? fallbackName}</p>
-                  <p className="truncate text-xs text-slate-400">{user.email}</p>
+                  <p className="truncate text-sm font-semibold text-slate-950">{guestMode ? "Local workspace" : profile?.username ?? fallbackName}</p>
+                  <p className="truncate text-xs text-slate-400">{guestMode ? "Stored in this browser" : user?.email}</p>
                 </div>
                 {editMode ? (
                   <>
                     <DropdownMenu.Separator />
+                    <DropdownMenu.Item onSelect={() => setAiOrganizeOpen(true)}>
+                      <Sparkles size={15} />
+                      AI 整理导航
+                    </DropdownMenu.Item>
                     <DropdownMenu.Item onSelect={() => setDialog({ type: "link" })}>
                       <Plus size={15} />
                       新增链接
@@ -512,6 +627,13 @@ function AppContent() {
                       <Upload size={15} />
                       导入收藏夹
                     </DropdownMenu.Item>
+                    <DropdownMenu.Sub>
+                      <DropdownMenu.SubTrigger><Download size={15} />导出数据</DropdownMenu.SubTrigger>
+                      <DropdownMenu.SubContent>
+                        <DropdownMenu.Item onSelect={() => downloadNavigation(categories, "html")}>浏览器书签 HTML</DropdownMenu.Item>
+                        <DropdownMenu.Item onSelect={() => downloadNavigation(categories, "json")}>Web Nav JSON</DropdownMenu.Item>
+                      </DropdownMenu.SubContent>
+                    </DropdownMenu.Sub>
                   </>
                 ) : null}
                 <DropdownMenu.Separator />
@@ -524,14 +646,11 @@ function AppContent() {
                   />
                 </div>
                 <DropdownMenu.Separator />
-                <DropdownMenu.Item onSelect={() => setDialog({ type: "profile" })}>
-                  <Settings size={15} />
-                  账号设置
-                </DropdownMenu.Item>
+                {!guestMode ? <DropdownMenu.Item onSelect={() => setDialog({ type: "profile" })}><Settings size={15} />账号设置</DropdownMenu.Item> : null}
                 <DropdownMenu.Separator />
-                <DropdownMenu.Item color="red" onSelect={signOut}>
+                <DropdownMenu.Item color="red" onSelect={() => guestMode ? (localStorage.removeItem(GUEST_MODE_STORAGE_KEY), setGuestMode(false)) : void signOut()}>
                   <LogOut size={15} />
-                  退出登录
+                  {guestMode ? "退出本地模式" : "退出登录"}
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Root>
@@ -659,6 +778,14 @@ function AppContent() {
       </main>
 
       {/* ── Dialogs ── */}
+      <AiOrganizeDialog
+        categories={categories}
+        onApply={handleApplyAiOrganize}
+        onOpenChange={setAiOrganizeOpen}
+        open={aiOrganizeOpen}
+        userId={userId}
+      />
+
       <Dialog.Root open={dialog?.type === "link"} onOpenChange={(open) => !open && setDialog(null)}>
         <Dialog.Content maxWidth="520px">
           <Dialog.Title>{dialog?.type === "link" && dialog.link ? "编辑链接" : "新增链接"}</Dialog.Title>

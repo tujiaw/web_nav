@@ -30,15 +30,27 @@ create table if not exists public.links (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.user_configs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  key text not null,
+  value jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, key)
+);
+
 create index if not exists categories_user_id_idx on public.categories(user_id);
 create index if not exists links_user_id_idx on public.links(user_id);
 create index if not exists links_category_id_idx on public.links(category_id);
+create index if not exists user_configs_user_id_idx on public.user_configs(user_id);
 
 alter table public.links add column if not exists icon_url text;
 
 alter table public.profiles enable row level security;
 alter table public.categories enable row level security;
 alter table public.links enable row level security;
+alter table public.user_configs enable row level security;
 
 create policy "profiles_select_own"
   on public.profiles for select
@@ -101,4 +113,21 @@ create policy "links_update_own"
 
 create policy "links_delete_own"
   on public.links for delete
+  using (auth.uid() = user_id);
+
+create policy "user_configs_select_own"
+  on public.user_configs for select
+  using (auth.uid() = user_id);
+
+create policy "user_configs_insert_own"
+  on public.user_configs for insert
+  with check (auth.uid() = user_id);
+
+create policy "user_configs_update_own"
+  on public.user_configs for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "user_configs_delete_own"
+  on public.user_configs for delete
   using (auth.uid() = user_id);

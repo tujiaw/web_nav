@@ -1,112 +1,145 @@
-import { FormEvent, useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpRight, Globe2, Plus, Search } from "lucide-react";
 import { Button, Select, TextField } from "@radix-ui/themes";
 import { searchProviders } from "../data/defaults";
 import { getHostname, getLinkIconUrl } from "../lib/url";
-import type { NavLink } from "../types";
+import type { NavCategory, NavLink } from "../types";
 
 type SearchPanelProps = {
-  links: NavLink[];
+  categories: NavCategory[];
+  onAddLink: () => void;
   onOpenLink: (link: NavLink) => void;
 };
 
-export function SearchPanel({ links, onOpenLink }: SearchPanelProps) {
+type SearchResult = { categoryName: string; link: NavLink; score: number };
+
+function fuzzyScore(query: string, text: string) {
+  const normalizedQuery = query.toLocaleLowerCase().trim();
+  const normalizedText = text.toLocaleLowerCase();
+  if (!normalizedQuery) return 0;
+  const directIndex = normalizedText.indexOf(normalizedQuery);
+  if (directIndex >= 0) return 1000 - directIndex;
+
+  let queryIndex = 0;
+  let gap = 0;
+  for (let textIndex = 0; textIndex < normalizedText.length && queryIndex < normalizedQuery.length; textIndex += 1) {
+    if (normalizedText[textIndex] === normalizedQuery[queryIndex]) queryIndex += 1;
+    else if (queryIndex > 0) gap += 1;
+  }
+  return queryIndex === normalizedQuery.length ? Math.max(1, 500 - gap) : -1;
+}
+
+export function SearchPanel({ categories, onAddLink, onOpenLink }: SearchPanelProps) {
   const [providerId, setProviderId] = useState(searchProviders[0].id);
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(false);
-  const provider = useMemo(
-    () => searchProviders.find((item) => item.id === providerId) ?? searchProviders[0],
-    [providerId],
-  );
-  const siteResults = useMemo(() => {
-    const value = query.trim().toLowerCase();
-    if (!value) {
-      return [];
-    }
-
-    return links
-      .filter((link) => {
-        const haystack = `${link.title} ${link.url} ${link.description ?? ""}`.toLowerCase();
-        return haystack.includes(value);
-      })
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const provider = useMemo(() => searchProviders.find((item) => item.id === providerId) ?? searchProviders[0], [providerId]);
+  const siteResults = useMemo<SearchResult[]>(() => {
+    const value = query.trim();
+    if (!value) return [];
+    return categories
+      .flatMap((category) => category.links.map((link) => ({
+        categoryName: category.name,
+        link,
+        score: fuzzyScore(value, `${link.title} ${link.url} ${link.description ?? ""} ${category.name}`),
+      })))
+      .filter((result) => result.score >= 0)
+      .sort((a, b) => b.score - a.score || b.link.clicks - a.link.clicks)
       .slice(0, 8);
-  }, [links, query]);
-  const showSiteResults = focused && siteResults.length > 0;
+  }, [categories, query]);
+  const showResults = focused && query.trim().length > 0;
 
-  function handleChange(value: string) {
-    setQuery(value);
-  }
+  useEffect(() => {
+    const handleShortcut = (event: globalThis.KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      } else if (!isTyping && event.key === "/") {
+        event.preventDefault();
+        inputRef.current?.focus();
+      } else if (!isTyping && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        onAddLink();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [onAddLink]);
 
-  function handleOpenResult(link: NavLink) {
-    setFocused(false);
-    onOpenLink(link);
+  useEffect(() => setActiveIndex(0), [query]);
+
+  function searchWeb() {
+    const value = query.trim();
+    if (value) window.open(`${provider.searchUrl}${encodeURIComponent(value)}`, "_blank", "noopener,noreferrer");
   }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    const value = query.trim();
-    if (!value) {
+    if (siteResults[activeIndex]) {
+      setFocused(false);
+      onOpenLink(siteResults[activeIndex].link);
       return;
     }
+    searchWeb();
+  }
 
-    window.open(`${provider.searchUrl}${encodeURIComponent(value)}`, "_blank", "noopener,noreferrer");
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.min(current + 1, siteResults.length));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Escape") {
+      setFocused(false);
+      inputRef.current?.blur();
+    }
   }
 
   return (
-    <form className="relative flex w-full max-w-xl items-center gap-2" onSubmit={handleSubmit}>
-      <div className="shrink-0 w-24">
+    <form className="relative flex w-full max-w-2xl items-center gap-2" onSubmit={handleSubmit}>
+      <div className="w-24 shrink-0">
         <Select.Root onValueChange={setProviderId} value={providerId}>
           <Select.Trigger className="w-full" />
-          <Select.Content>
-            {searchProviders.map((item) => (
-              <Select.Item key={item.id} value={item.id}>
-                {item.name}
-              </Select.Item>
-            ))}
-          </Select.Content>
+          <Select.Content>{searchProviders.map((item) => <Select.Item key={item.id} value={item.id}>{item.name}</Select.Item>)}</Select.Content>
         </Select.Root>
       </div>
       <TextField.Root
+        aria-autocomplete="list"
+        aria-controls="web-nav-search-results"
+        aria-expanded={showResults}
         className="min-w-0 flex-1"
         onBlur={() => window.setTimeout(() => setFocused(false), 120)}
-        onChange={(event) => handleChange(event.target.value)}
+        onChange={(event) => setQuery(event.target.value)}
         onFocus={() => setFocused(true)}
-        placeholder={provider.placeholder}
+        onKeyDown={handleKeyDown}
+        placeholder="Search links or the web…"
+        ref={inputRef}
         size="2"
         value={query}
       >
-        <TextField.Slot>
-          <Search size={16} />
-        </TextField.Slot>
+        <TextField.Slot><Search size={16} /></TextField.Slot>
+        <TextField.Slot><kbd className="hidden rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-400 sm:inline">Ctrl K</kbd></TextField.Slot>
       </TextField.Root>
-      <Button className="shrink-0 bg-slate-900 font-semibold text-white hover:bg-slate-800" size="2" type="submit">
-        搜索
-      </Button>
-      {showSiteResults ? (
-        <div className="absolute left-24 right-[72px] top-[calc(100%+8px)] z-50 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)]">
-          {siteResults.map((link) => (
-            <button
-              className="flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left transition hover:bg-slate-50"
-              key={link.id}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => handleOpenResult(link)}
-              type="button"
-            >
-              <img
-                alt=""
-                className="h-5 w-5 shrink-0 rounded"
-                loading="lazy"
-                src={getLinkIconUrl(link.url, link.iconUrl)}
-                onError={(event) => {
-                  (event.target as HTMLImageElement).src = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%2394a3b8"><rect width="24" height="24" rx="4"/><path d="M10 6h8v8h-2V9.4L9.4 16 8 14.6 14.6 8H10V6z" fill="%23fff"/></svg>`;
-                }}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-slate-900">{link.title}</span>
-                <span className="mt-0.5 block truncate text-xs text-slate-400">{getHostname(link.url)}</span>
-              </span>
+      <Button className="shrink-0 bg-slate-900 font-semibold text-white hover:bg-slate-800" size="2" type="submit">搜索</Button>
+      {showResults ? (
+        <div className="absolute left-24 right-[72px] top-[calc(100%+8px)] z-50 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl" id="web-nav-search-results" role="listbox">
+          {siteResults.map((result, index) => (
+            <button className={`flex w-full items-center gap-2.5 px-3 py-2 text-left ${index === activeIndex ? "bg-teal-50" : "hover:bg-slate-50"}`} key={result.link.id} onMouseDown={(event) => event.preventDefault()} onClick={() => onOpenLink(result.link)} role="option" type="button">
+              <img alt="" className="h-5 w-5 rounded" src={getLinkIconUrl(result.link.url, result.link.iconUrl)} />
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{result.link.title}</span><span className="block truncate text-xs text-slate-400">{result.categoryName} · {getHostname(result.link.url)}</span></span>
+              <ArrowUpRight className="text-slate-400" size={14} />
             </button>
           ))}
+          <button className={`flex w-full items-center gap-2.5 border-t border-slate-100 px-3 py-2 text-left ${activeIndex === siteResults.length ? "bg-teal-50" : "hover:bg-slate-50"}`} onMouseDown={(event) => event.preventDefault()} onClick={searchWeb} type="button">
+            <Globe2 size={18} className="text-slate-500" /><span className="min-w-0 flex-1 truncate text-sm">Search “{query}” with {provider.name}</span>
+          </button>
+          <button className="flex w-full items-center gap-2.5 border-t border-slate-100 px-3 py-2 text-left text-sm text-slate-500 hover:bg-slate-50" onMouseDown={(event) => event.preventDefault()} onClick={onAddLink} type="button"><Plus size={18} />Add a new link <kbd className="ml-auto text-xs">N</kbd></button>
         </div>
       ) : null}
     </form>

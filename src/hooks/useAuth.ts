@@ -7,6 +7,7 @@ type AuthState = {
   session: Session | null;
   user: User | null;
   signInWithGitHub: () => Promise<void>;
+  signInWithEmail: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -53,6 +54,14 @@ export function useAuth(): AuthState {
       if (error) {
         throw error;
       }
+    },
+    signInWithEmail: async (email: string) => {
+      if (!supabase || !isSupabaseConfigured) return;
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: { emailRedirectTo: window.location.origin },
+      });
+      if (error) throw error;
     },
     signOut: async () => {
       if (!supabase) {

@@ -32,6 +32,15 @@ type ProfileRow = {
   updated_at: string;
 };
 
+type UserConfigRow = {
+  id: string;
+  user_id: string;
+  key: string;
+  value: unknown;
+  created_at: string;
+  updated_at: string;
+};
+
 type SupabaseErrorLike = {
   code?: string;
   message?: string;
@@ -160,6 +169,42 @@ export async function upsertProfile(userId: string, username: string, passwordHi
   }
 
   return mapProfile(data);
+}
+
+export async function getUserConfig<T>(userId: string, key: string): Promise<T | null> {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("user_configs")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("key", key)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data ? ((data as UserConfigRow).value as T) : null;
+}
+
+export async function saveUserConfig<T>(userId: string, key: string, value: T) {
+  if (!supabase) {
+    return;
+  }
+
+  const { error } = await supabase.from("user_configs").upsert({
+    user_id: userId,
+    key,
+    value,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    throw error;
+  }
 }
 
 export async function loadNavigation(userId: string) {
@@ -370,6 +415,33 @@ export async function deleteLink(linkId: string) {
   if (error) {
     throw error;
   }
+}
+
+export async function moveLinksToCategories(
+  userId: string,
+  updates: Array<{ linkId: string; categoryId: string }>,
+) {
+  if (!supabase || updates.length === 0) {
+    return;
+  }
+
+  const client = supabase;
+  await Promise.all(
+    updates.map(async (update) => {
+      const { error } = await client
+        .from("links")
+        .update({
+          category_id: update.categoryId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", update.linkId)
+        .eq("user_id", userId);
+
+      if (error) {
+        throw error;
+      }
+    }),
+  );
 }
 
 export async function incrementClicks(link: NavLink) {
