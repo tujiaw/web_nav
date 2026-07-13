@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
-import { Button, Callout, Select, Text, TextArea, TextField } from "@radix-ui/themes";
+import { Button, Callout, Flex, Select, Text, TextArea, TextField } from "@radix-ui/themes";
 import { inspectLinkMetadata } from "../lib/linkMetadata";
 import { getLinkIconUrl, setDefaultLinkIcon } from "../lib/url";
 import type { CategoryFormValue, LinkFormValue, NavCategory, NavLink, Profile } from "../types";
@@ -144,7 +144,7 @@ export function LinkForm({ categories, initialCategoryId, initialValue, onCancel
           value={description}
         />
       </label>
-      <div className="flex justify-end gap-2">
+      <Flex gap="2" justify="end">
         <Button color="gray" onClick={onCancel} type="button" variant="soft">
           取消
         </Button>
@@ -152,7 +152,7 @@ export function LinkForm({ categories, initialCategoryId, initialValue, onCancel
           {saving ? <Loader2 className="animate-spin" size={16} /> : null}
           保存
         </Button>
-      </div>
+      </Flex>
     </form>
   );
 }
@@ -192,7 +192,7 @@ export function CategoryForm({ initialValue, onCancel, onSubmit }: CategoryFormP
           <Callout.Text>{submitError}</Callout.Text>
         </Callout.Root>
       ) : null}
-      <div className="flex justify-end gap-2">
+      <Flex gap="2" justify="end">
         <Button color="gray" onClick={onCancel} type="button" variant="soft">
           取消
         </Button>
@@ -200,7 +200,7 @@ export function CategoryForm({ initialValue, onCancel, onSubmit }: CategoryFormP
           {saving ? <Loader2 className="animate-spin" size={16} /> : null}
           保存
         </Button>
-      </div>
+      </Flex>
     </form>
   );
 }
@@ -253,7 +253,7 @@ export function ProfileForm({ fallbackName, onCancel, onSubmit, profile }: Profi
           <Callout.Text>{submitError}</Callout.Text>
         </Callout.Root>
       ) : null}
-      <div className="flex justify-end gap-2">
+      <Flex gap="2" justify="end">
         <Button color="gray" onClick={onCancel} type="button" variant="soft">
           取消
         </Button>
@@ -261,7 +261,7 @@ export function ProfileForm({ fallbackName, onCancel, onSubmit, profile }: Profi
           {saving ? <Loader2 className="animate-spin" size={16} /> : null}
           保存
         </Button>
-      </div>
+      </Flex>
     </form>
   );
 }

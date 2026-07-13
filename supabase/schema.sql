@@ -41,6 +41,23 @@ create table if not exists public.user_configs (
   unique (user_id, key)
 );
 
+create table if not exists public.drop_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null check (kind in ('text', 'file')),
+  content text,
+  file_name text,
+  file_path text,
+  file_size bigint,
+  mime_type text,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  constraint drop_items_payload_check check (
+    (kind = 'text' and length(trim(content)) > 0 and file_path is null)
+    or (kind = 'file' and file_path is not null and file_name is not null)
+  )
+);
+
 create table if not exists public.link_icons (
   link_id uuid primary key references public.links(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -58,6 +75,8 @@ create index if not exists links_title_trgm_idx on public.links using gin (title
 create index if not exists links_url_trgm_idx on public.links using gin (url gin_trgm_ops);
 create index if not exists links_description_trgm_idx on public.links using gin (description gin_trgm_ops);
 create index if not exists user_configs_user_id_idx on public.user_configs(user_id);
+create index if not exists drop_items_user_created_idx on public.drop_items(user_id, created_at);
+create index if not exists drop_items_expires_at_idx on public.drop_items(expires_at);
 create index if not exists link_icons_user_id_idx on public.link_icons(user_id);
 
 alter table public.links add column if not exists icon_url text;
@@ -79,6 +98,7 @@ alter table public.profiles enable row level security;
 alter table public.categories enable row level security;
 alter table public.links enable row level security;
 alter table public.user_configs enable row level security;
+alter table public.drop_items enable row level security;
 alter table public.link_icons enable row level security;
 
 create policy "profiles_select_own"
@@ -160,6 +180,36 @@ create policy "user_configs_update_own"
 create policy "user_configs_delete_own"
   on public.user_configs for delete
   using (auth.uid() = user_id);
+
+create policy "drop_items_select_own"
+  on public.drop_items for select
+  using (auth.uid() = user_id);
+
+create policy "drop_items_insert_own"
+  on public.drop_items for insert
+  with check (auth.uid() = user_id and expires_at > now() and expires_at <= now() + interval '90 days 5 minutes');
+
+create policy "drop_items_delete_own"
+  on public.drop_items for delete
+  using (auth.uid() = user_id);
+
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('drop-files', 'drop-files', false, 20971520)
+on conflict (id) do update set public = false, file_size_limit = 20971520;
+
+create policy "drop_files_select_own"
+  on storage.objects for select to authenticated
+  using (bucket_id = 'drop-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "drop_files_insert_own"
+  on storage.objects for insert to authenticated
+  with check (bucket_id = 'drop-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "drop_files_delete_own"
+  on storage.objects for delete to authenticated
+  using (bucket_id = 'drop-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+alter publication supabase_realtime add table public.drop_items;
 
 create policy "link_icons_select_own"
   on public.link_icons for select

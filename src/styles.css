@@ -8,6 +8,7 @@
 
 html {
   background: #f8fafc;
+  scrollbar-gutter: stable;
 }
 
 body {

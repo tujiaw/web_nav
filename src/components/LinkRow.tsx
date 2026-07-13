@@ -1,5 +1,5 @@
 import { ExternalLink, Pencil, Trash2 } from "lucide-react";
-import { IconButton, Tooltip } from "@radix-ui/themes";
+import { Flex, IconButton, Tooltip } from "@radix-ui/themes";
 import type { NavLink } from "../types";
 import { useEditMode } from "./EditModeContext";
 import { LinkIcon } from "./LinkIcon";
@@ -47,7 +47,7 @@ export function LinkRow({ link, onOpen, onEdit, onDelete, userId }: LinkRowProps
 
       {/* hover 操作按钮 */}
       {editMode ? (
-        <div className="ml-auto flex shrink-0 gap-0.5 opacity-0 transition group-hover:opacity-100">
+        <Flex className="ml-auto shrink-0 opacity-0 transition group-hover:opacity-100" gap="1">
           <Tooltip content="新标签页打开">
             <IconButton
               aria-label="新标签页打开"
@@ -85,7 +85,7 @@ export function LinkRow({ link, onOpen, onEdit, onDelete, userId }: LinkRowProps
               </IconButton>
             </Tooltip>
           ) : null}
-        </div>
+        </Flex>
       ) : null}
     </div>
   );

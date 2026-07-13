@@ -5,6 +5,7 @@ import {
   FolderPlus,
   Github,
   LayoutDashboard,
+  Send,
   Loader2,
   LogOut,
   Pencil,
@@ -16,7 +17,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { AlertDialog, Button, Callout, Dialog, DropdownMenu, IconButton, Switch, Tabs, TextField, Theme, Tooltip } from "@radix-ui/themes";
+import { AlertDialog, Button, Callout, Dialog, DropdownMenu, Flex, IconButton, Switch, Tabs, TextField, Theme, Tooltip } from "@radix-ui/themes";
 import { CategorySection } from "./components/CategorySection";
 import { AiOrganizeDialog } from "./components/AiOrganizeDialog";
 import { EmptyState } from "./components/EmptyState";
@@ -44,6 +45,7 @@ import { parseBookmarkHtml } from "./lib/bookmarkImport";
 import { normalizeUrl } from "./lib/url";
 import { downloadNavigation } from "./lib/navigationExport";
 import { EditModeProvider, useEditMode } from "./components/EditModeContext";
+import { DropPanel } from "./components/DropPanel";
 import type { CategoryFormValue, LinkFormValue, NavCategory, NavLink, Profile } from "./types";
 
 type DialogState =
@@ -60,6 +62,10 @@ type FilePickerWindow = Window & {
       accept: Record<string, string[]>;
     }>;
   }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+};
+
+type DebugWindow = Window & {
+  __refreshAllIcons?: () => Promise<void>;
 };
 
 const BING_WALLPAPER_STORAGE_KEY = "web-nav-bing-wallpaper";
@@ -190,6 +196,7 @@ function AppContent() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [aiOrganizeOpen, setAiOrganizeOpen] = useState(false);
+  const [dropOpen, setDropOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NavLink | NavCategory | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [bookmarkFile, setBookmarkFile] = useState<File | null>(null);
@@ -219,6 +226,7 @@ function AppContent() {
   // One-shot icon refresh: run `window.__refreshAllIcons()` in the browser console
   useEffect(() => {
     if (!userId || !supabase) return;
+    const client = supabase;
 
     async function refreshAllIcons() {
       const isValidIconUrl = (value?: string) => value && /^https?:\/\//i.test(value);
@@ -277,9 +285,10 @@ function AppContent() {
         if (!iconUrl) continue;
         const links = pendingByUrl.get(url) ?? [];
         for (const link of links) {
-          updates.push(
-            supabase.from("links").update({ icon_url: iconUrl, updated_at: new Date().toISOString() }).eq("id", link.id).then(() => { updated++; }),
-          );
+          updates.push((async () => {
+            await client.from("links").update({ icon_url: iconUrl, updated_at: new Date().toISOString() }).eq("id", link.id);
+            updated++;
+          })());
         }
       }
       await Promise.all(updates);
@@ -287,8 +296,8 @@ function AppContent() {
       console.log(`[refreshIcons] Done. Updated ${updated} links. Reload the page to see changes.`);
     }
 
-    (window as any).__refreshAllIcons = refreshAllIcons;
-    return () => { delete (window as any).__refreshAllIcons; };
+    (window as DebugWindow).__refreshAllIcons = refreshAllIcons;
+    return () => { delete (window as DebugWindow).__refreshAllIcons; };
   }, [allLinks, userId]);
 
   const filteredCategories = categories;
@@ -722,7 +731,14 @@ function AppContent() {
           </div>
 
           {/* 右侧操作 */}
-          <div className="flex shrink-0 items-center gap-2">
+          <Flex align="center" className="shrink-0" gap="3">
+            {!guestMode ? (
+              <Tooltip content="Drop">
+                <IconButton aria-label="打开 Drop" color="gray" onClick={() => setDropOpen(true)} variant="ghost">
+                  <Send size={17} />
+                </IconButton>
+              </Tooltip>
+            ) : null}
             {/* 编辑模式切换 */}
             <Tooltip content={editMode ? "切换到浏览模式" : "切换到编辑模式"}>
               <IconButton
@@ -736,7 +752,7 @@ function AppContent() {
             </Tooltip>
 
             {/* 用户下拉菜单 */}
-            <DropdownMenu.Root>
+            <DropdownMenu.Root modal={false}>
               <DropdownMenu.Trigger>
                 <IconButton aria-label="用户菜单" color="gray" className="rounded-full border border-slate-200 bg-white/70" variant="soft">
                   <UserRound size={17} />
@@ -793,7 +809,7 @@ function AppContent() {
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Root>
-          </div>
+          </Flex>
         </div>
       </header>
 
@@ -970,7 +986,7 @@ function AppContent() {
                 ? `删除链接「${deleteTarget.title}」？`
                 : ""}
           </AlertDialog.Description>
-          <div className="mt-5 flex justify-end gap-2">
+          <Flex className="mt-5" gap="2" justify="end">
             <AlertDialog.Cancel>
               <Button color="gray" variant="soft">
                 取消
@@ -981,7 +997,7 @@ function AppContent() {
                 删除
               </Button>
             </AlertDialog.Action>
-          </div>
+          </Flex>
         </AlertDialog.Content>
       </AlertDialog.Root>
 
@@ -1020,7 +1036,7 @@ function AppContent() {
               选择文件
             </Button>
           </div>
-          <div className="mt-5 flex justify-end gap-2">
+          <Flex className="mt-5" gap="2" justify="end">
             <Button color="gray" disabled={importing} onClick={() => setImportDialogOpen(false)} variant="soft">
               {importResult ? "关闭" : "取消"}
             </Button>
@@ -1028,9 +1044,11 @@ function AppContent() {
               {importing ? <Loader2 className="animate-spin" size={16} /> : <Upload size={16} />}
               开始导入
             </Button>
-          </div>
+          </Flex>
         </Dialog.Content>
       </Dialog.Root>
+
+      {!guestMode && user ? <DropPanel onOpenChange={setDropOpen} open={dropOpen} userId={user.id} /> : null}
     </div>
   );
 }

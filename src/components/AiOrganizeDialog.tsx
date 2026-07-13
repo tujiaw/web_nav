@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
-import { Button, Callout, Checkbox, Dialog, IconButton, Switch, TextField } from "@radix-ui/themes";
+import { Button, Callout, Checkbox, Dialog, Flex, IconButton, Switch, TextField } from "@radix-ui/themes";
 import { getUserConfig, saveUserConfig } from "../lib/navStore";
 import type { LlmConfig, NavCategory } from "../types";
 
@@ -191,7 +191,7 @@ export function AiOrganizeDialog({ categories, onApply, onOpenChange, open, user
         onEscapeKeyDown={(event) => event.preventDefault()}
         onInteractOutside={(event) => event.preventDefault()}
       >
-        <div className="flex items-center justify-between gap-3">
+        <Flex align="center" gap="3" justify="between">
           <Dialog.Title className="mb-0">AI 整理导航</Dialog.Title>
           <IconButton
             aria-label="关闭"
@@ -202,7 +202,7 @@ export function AiOrganizeDialog({ categories, onApply, onOpenChange, open, user
           >
             <X size={16} />
           </IconButton>
-        </div>
+        </Flex>
         <div className="grid gap-5 pt-2">
           {error ? (
             <Callout.Root color="red" size="1">
@@ -254,16 +254,16 @@ export function AiOrganizeDialog({ categories, onApply, onOpenChange, open, user
                 onCheckedChange={(checked) => setConfig((current) => ({ ...current, disableThinking: checked }))}
               />
             </label>
-            <div className="flex justify-end">
+            <Flex justify="end">
               <Button disabled={configSaving} size="2" type="submit" variant="soft">
                 {configSaving ? <Loader2 className="animate-spin" size={15} /> : <Check size={15} />}
                 保存模型配置
               </Button>
-            </div>
+            </Flex>
           </form>
 
           <section className="grid gap-3">
-            <div className="flex items-center justify-between gap-3">
+            <Flex align="center" gap="3" justify="between">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">待整理范围</h3>
                 <p className="mt-0.5 text-xs text-slate-400">只整理勾选分类中的链接，目标分类可从全部已有分类中选择。</p>
@@ -272,7 +272,7 @@ export function AiOrganizeDialog({ categories, onApply, onOpenChange, open, user
                 {running ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
                 生成整理建议
               </Button>
-            </div>
+            </Flex>
             <div className="grid max-h-40 grid-cols-1 gap-2 overflow-auto rounded-lg border border-slate-200 p-3 sm:grid-cols-2 lg:grid-cols-3">
               {categories.map((category) => (
                 <label className="flex items-center gap-2 text-sm text-slate-700" key={category.id}>
@@ -285,13 +285,13 @@ export function AiOrganizeDialog({ categories, onApply, onOpenChange, open, user
           </section>
 
           <section className="grid gap-3">
-            <div className="flex items-center justify-between gap-3">
+            <Flex align="center" gap="3" justify="between">
               <h3 className="text-sm font-semibold text-slate-900">整理结果</h3>
               <Button disabled={applying || visibleSuggestions.length === 0} onClick={handleApply} size="2">
                 {applying ? <Loader2 className="animate-spin" size={15} /> : <Check size={15} />}
                 批量确认
               </Button>
-            </div>
+            </Flex>
             <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
               {visibleSuggestions.length > 0 ? (
                 visibleSuggestions.map((suggestion) => {
