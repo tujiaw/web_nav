@@ -63,11 +63,19 @@ function expirationDate(retentionDays: number) {
   return new Date(Date.now() + retentionDays * 86_400_000).toISOString();
 }
 
-function safeFileName(name: string) {
+function safeDisplayFileName(name: string) {
   return Array.from(name.normalize("NFKC"), (character) => {
     const code = character.charCodeAt(0);
     return character === "/" || character === "\\" || code < 32 ? "_" : character;
   }).join("").slice(0, 180) || "file";
+}
+
+function storageObjectName(name: string) {
+  const dotIndex = name.lastIndexOf(".");
+  const extension = dotIndex >= 0
+    ? name.slice(dotIndex + 1).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12)
+    : "";
+  return extension ? `file.${extension}` : "file";
 }
 
 export async function loadDropItems(userId: string) {
@@ -96,8 +104,8 @@ export async function addDropText(userId: string, content: string, retentionDays
 export async function addDropFile(userId: string, file: File, retentionDays: number) {
   if (!supabase) throw new Error("Supabase 未配置");
   const id = crypto.randomUUID();
-  const fileName = safeFileName(file.name);
-  const filePath = `${userId}/${id}/${fileName}`;
+  const fileName = safeDisplayFileName(file.name);
+  const filePath = `${userId}/${id}/${storageObjectName(file.name)}`;
   const { error: uploadError } = await supabase.storage.from(bucket).upload(filePath, file, {
     cacheControl: "3600",
     contentType: file.type || "application/octet-stream",
